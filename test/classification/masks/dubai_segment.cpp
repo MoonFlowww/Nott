@@ -1018,6 +1018,24 @@ namespace {
         cv::GaussianBlur(img_bgr, img_bgr, cv::Size(), 0.83);
         cv::imwrite(path+"/"+kind+"_smooth.png", img_bgr);
     }
+
+    inline SuperpixelDataset BuildSuperpixelDatasetForLimitedVoronoiCuts(
+    const torch::Tensor& inputs,
+    const torch::Tensor& targets,
+    const SuperpixelParams& params,
+    std::size_t max_cuts = 20) {
+
+        TORCH_CHECK(inputs.size(0) == targets.size(0), "Inputs and targets must have the same batch size");
+
+        const int64_t limited = std::min<int64_t>(inputs.size(0), static_cast<int64_t>(max_cuts));
+        auto slice = torch::indexing::Slice(0, limited);
+
+        torch::Tensor limited_inputs = inputs.index({slice});
+        torch::Tensor limited_targets = targets.index({slice});
+
+        return BuildSuperpixelDataset(limited_inputs, limited_targets, params);
+    }
+
 }
 
 int main() {
@@ -1061,82 +1079,27 @@ int main() {
     Nott::Data::Check::Size(Y, "Y Total");
 
 
+    model.add(Nott::Layer::Conv2d({3, 32, {1, 3}, {1, 1}, {0, 1}},
+        Nott::Activation::ReLU,Nott::Initialization::HeUniform),"conv1");
 
+    model.add(Nott::Layer::BatchNorm2d({.num_features = 32}), "bn1");
+    model.add(Nott::Layer::Conv2d({32, 64, {1, 3}, {1, 1}, {0, 1}},
+        Nott::Activation::ReLU,Nott::Initialization::HeUniform),"conv2");
 
-
-    auto Y_onehot = ConvertRgbMasksToOneHot(Y);
-
-    auto block = [&](int in_c, int out_c) {
-        return Nott::Block::Sequential({
-            Nott::Layer::Conv2d(
-                {in_c, out_c, {3,3}, {1,1}, {1,1}},
-                Nott::Activation::ReLU,
-                Nott::Initialization::HeUniform
-            ),
-            Nott::Layer::Conv2d(
-                {out_c, out_c, {3,3}, {1,1}, {1,1}},
-                Nott::Activation::ReLU,
-                Nott::Initialization::HeUniform
-            ),
-        });
-    };
-
-    auto upblock = [&](int in_c, int out_c) {
-        return Nott::Block::Sequential({
-            Nott::Layer::Upsample({.scale = {2,2}, .mode  = Nott::UpsampleMode::Bilinear}),
-            Nott::Layer::Conv2d(
-                {in_c, out_c, {3,3}, {1,1}, {1,1}},
-                Nott::Activation::ReLU,
-                Nott::Initialization::HeUniform
-            ),
-        });
-    };
-
-    model.add(block(3, 64), "enc1");
-    model.add(Nott::Layer::MaxPool2d({{2, 2}, {2, 2}}), "pool1");
-    model.add(block(64,  128), "enc2");
-    model.add(Nott::Layer::MaxPool2d({{2, 2}, {2, 2}}), "pool2");
-    model.add(block(128, 256), "enc3");
-    model.add(Nott::Layer::MaxPool2d({{2, 2}, {2, 2}}), "pool3");
-    model.add(block(256, 512), "enc4");
-    model.add(Nott::Layer::MaxPool2d({{2, 2}, {2, 2}}), "pool4");
-
-    model.add(block(512, 1024), "bottleneck");
-
-    model.add(upblock(1024, 512), "up4");
-    model.add(block(1024, 512), "dec4");
-    model.add(upblock(512, 256), "up3");
-    model.add(block(512, 256), "dec3");
-    model.add(upblock(256, 128), "up2");
-    model.add(block(256, 128),"dec2");
-    model.add(upblock(128, 64), "up1");
-    model.add(block(128, 64), "dec1");
-
-    model.add(Nott::Layer::Conv2d({64, 6, {1, 1}, {1, 1}, {0, 0}}, Nott::Activation::Identity), "logits");
+    model.add(Nott::Layer::BatchNorm2d({.num_features = 64}), "bn2");
+    model.add(Nott::Layer::AdaptiveAvgPool2d({.output_size = {1,1}}), "gap");
+    model.add(Nott::Layer::Flatten(), "flatten");
+    model.add(Nott::Layer::FC({64, 6}, Nott::Activation::Identity, Nott::Initialization::XavierUniform), "classifier");
 
     model.links({
-        Nott::LinkSpec{Nott::Port::Input("@input"), Nott::Port::Module("enc1")},
-        Nott::LinkSpec{Nott::Port::Module("enc1"),  Nott::Port::Module("pool1")},
-        Nott::LinkSpec{Nott::Port::Module("pool1"), Nott::Port::Module("enc2")},
-        Nott::LinkSpec{Nott::Port::Module("enc2"),  Nott::Port::Module("pool2")},
-        Nott::LinkSpec{Nott::Port::Module("pool2"), Nott::Port::Module("enc3")},
-        Nott::LinkSpec{Nott::Port::Module("enc3"),  Nott::Port::Module("pool3")},
-        Nott::LinkSpec{Nott::Port::Module("pool3"), Nott::Port::Module("enc4")},
-        Nott::LinkSpec{Nott::Port::Module("enc4"),  Nott::Port::Module("pool4")},
-        Nott::LinkSpec{Nott::Port::Module("pool4"), Nott::Port::Module("bottleneck")},
-
-        Nott::LinkSpec{Nott::Port::Module("bottleneck"), Nott::Port::Module("up4")},
-        Nott::LinkSpec{Nott::Port::Join({"up4", "enc4"}, Nott::MergePolicy::Stack), Nott::Port::Module("dec4")},
-        Nott::LinkSpec{Nott::Port::Module("dec4"), Nott::Port::Module("up3")},
-        Nott::LinkSpec{Nott::Port::Join({"up3", "enc3"}, Nott::MergePolicy::Stack), Nott::Port::Module("dec3")},
-
-        Nott::LinkSpec{Nott::Port::Module("dec3"), Nott::Port::Module("up2") },
-        Nott::LinkSpec{Nott::Port::Join({"up2", "enc2"}, Nott::MergePolicy::Stack), Nott::Port::Module("dec2")},
-        Nott::LinkSpec{Nott::Port::Module("dec2"), Nott::Port::Module("up1") },
-        Nott::LinkSpec{Nott::Port::Join({"up1", "enc1"}, Nott::MergePolicy::Stack), Nott::Port::Module("dec1")},
-
-        Nott::LinkSpec{Nott::Port::Module("dec1"),   Nott::Port::Module("logits")}, // dec3
-        Nott::LinkSpec{Nott::Port::Module("logits"), Nott::Port::Output("@output")},
+        Nott::LinkSpec{Nott::Port::Input("@input"), Nott::Port::Module("conv1")},
+        Nott::LinkSpec{Nott::Port::Module("conv1"), Nott::Port::Module("bn1")},
+        Nott::LinkSpec{Nott::Port::Module("bn1"), Nott::Port::Module("conv2")},
+        Nott::LinkSpec{Nott::Port::Module("conv2"), Nott::Port::Module("bn2")},
+        Nott::LinkSpec{Nott::Port::Module("bn2"), Nott::Port::Module("gap")},
+        Nott::LinkSpec{Nott::Port::Module("gap"), Nott::Port::Module("flatten")},
+        Nott::LinkSpec{Nott::Port::Module("flatten"), Nott::Port::Module("classifier")},
+        Nott::LinkSpec{Nott::Port::Module("classifier"), Nott::Port::Output("@output")},
     }, true);
 
 
@@ -1182,10 +1145,13 @@ int main() {
 
     SuperpixelParams params = {};
     params.desired_superpixels = 400;
-    SuperpixelDataset ds = BuildSuperpixelDataset(X, Y, params);
+    SuperpixelDataset ds = BuildSuperpixelDatasetForLimitedVoronoiCuts(X, Y, params, 20); //BuildSuperpixelDataset(X, Y, params);
     X = ds.X;
     Y = ds.y;
+    Nott::Data::Check::Size(X, "X Train");
+    X = X.view({-1, 3, 1, 5}).contiguous();
     Nott::Data::Check::Size(X, "X Train-ready");
+
     model.train(X, Y,
         {.epoch = E,
         .batch_size = B,
@@ -1196,14 +1162,12 @@ int main() {
         // .memory_format = torch::MemoryFormat::ChannelsLast
         });
 
-    model.evaluate(X, Y, Nott::Evaluation::Segmentation,{
+    model.evaluate(X, Y, Nott::Evaluation::Classification,{
         Nott::Metric::Classification::Accuracy,
         Nott::Metric::Classification::Precision,
         Nott::Metric::Classification::Recall,
         Nott::Metric::Classification::F1,
         Nott::Metric::Classification::JaccardIndexMicro,
-        Nott::Metric::Classification::BoundaryIoU,
-        Nott::Metric::Classification::HausdorffDistance,
     },{.batch_size = B, .buffer_vram=2});
 
 
