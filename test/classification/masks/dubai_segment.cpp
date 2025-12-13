@@ -950,6 +950,51 @@ namespace {
 
         return y; // [S], labels in [0..K-1]
     }
+    inline torch::Tensor BGRMatToTensorCHW(const cv::Mat& bgr)
+    {
+        TORCH_CHECK(bgr.type() == CV_8UC3, "Expected CV_8UC3 image");
+        cv::Mat rgb;
+        cv::cvtColor(bgr, rgb, cv::COLOR_BGR2RGB);
+
+        auto options = torch::TensorOptions().dtype(torch::kUInt8);
+        torch::Tensor hwc = torch::from_blob(rgb.data, {rgb.rows, rgb.cols, 3}, options).clone();
+        return hwc.permute({2, 0, 1}); // [3,H,W]
+    }
+
+    inline cv::Mat DrawVoronoiOverlay(const cv::Mat& bgr_image, const cv::Mat& labels)
+    {
+        TORCH_CHECK(labels.type() == CV_32S, "labels must be CV_32S");
+        cv::Mat overlay = bgr_image.clone();
+        cv::Mat boundary = cv::Mat::zeros(labels.size(), CV_8UC1);
+
+        const int rows = labels.rows;
+        const int cols = labels.cols;
+        for (int y = 0; y < rows; ++y) {
+            const int* row = labels.ptr<int>(y);
+            const int* prev = (y > 0) ? labels.ptr<int>(y - 1) : nullptr;
+            const int* next = (y + 1 < rows) ? labels.ptr<int>(y + 1) : nullptr;
+            uchar* bptr = boundary.ptr<uchar>(y);
+
+            for (int x = 0; x < cols; ++x) {
+                const int lbl = row[x];
+                bool edge = false;
+
+                if (x > 0 && row[x - 1] != lbl) edge = true;
+                if (x + 1 < cols && row[x + 1] != lbl) edge = true;
+                if (prev && prev[x] != lbl) edge = true;
+                if (next && next[x] != lbl) edge = true;
+
+                if (edge) {
+                    bptr[x] = 255;
+                }
+            }
+        }
+
+        overlay.setTo(cv::Scalar(0, 0, 255), boundary);
+        return overlay;
+    }
+
+
     struct SuperpixelDataset {
         torch::Tensor X; // features
         torch::Tensor y; // labels (int64)
@@ -1170,20 +1215,53 @@ int main() {
         Nott::Metric::Classification::JaccardIndexMicro,
     },{.batch_size = B, .buffer_vram=2});
 
+    // xs/ys store batches shaped [N, 3, H, W]; pick a single sample to visualize
+    torch::Tensor sample_input = xs.front().index({0}).to(torch::kFloat32) / 255.0f;
+    torch::Tensor sample_target = ys.front().index({0});
 
-    std::tie(X, Y) = Nott::Data::Manipulation::Fraction(X, Y, 0.01f);
-    Nott::Data::Check::Size(X, "Inference");
-    auto logits = model.forward(X);
-    auto predicted = logits.argmax(1).to(torch::kCPU);
-    auto first_pred = predicted.index({0}).contiguous();
-    auto forecast_rgb = ColorizeClassMap(first_pred);
+    cv::Mat sample_bgr = TensorCHWToBGRMat(sample_input);
+    SuperpixelSegmentationResult sample_seg = RunSuperpixelSegmentation(sample_bgr, params);
 
-    auto ground_truth = Y.argmax(1).to(torch::kCPU);
-    auto gt_rgb = ColorizeClassMap(ground_truth.index({0}).contiguous());
+    cv::Mat overlay = DrawVoronoiOverlay(sample_bgr, sample_seg.labels);
+    torch::Tensor overlay_chw = BGRMatToTensorCHW(overlay);
+    Nott::Plot::Data::Image(overlay_chw, {0});
+
+    torch::Tensor sample_feats = ComputeSuperpixelRGBStats(
+        sample_input,
+        sample_seg.labels,
+        static_cast<int>(sample_seg.centers.size()));
+    sample_feats = sample_feats.view({-1, 3, 1, 5}).to(torch::kFloat32);
+    if (torch::cuda::is_available()) {
+        sample_feats = sample_feats.cuda();
+    }
+
+    torch::NoGradGuard no_grad;
+    torch::Tensor sample_logits = model.forward(sample_feats);
+    torch::Tensor sample_pred = sample_logits.argmax(1).to(torch::kCPU);
+
+    torch::Tensor pred_map = torch::zeros(
+        {sample_seg.labels.rows, sample_seg.labels.cols},
+        torch::TensorOptions().dtype(torch::kLong));
+    auto pred_acc = sample_pred.accessor<int64_t, 1>();
+    auto map_acc = pred_map.accessor<int64_t, 2>();
+    for (int y = 0; y < sample_seg.labels.rows; ++y) {
+        const int* lbl_ptr = sample_seg.labels.ptr<int>(y);
+        for (int x = 0; x < sample_seg.labels.cols; ++x) {
+            const int sid = lbl_ptr[x];
+            if (sid >= 0 && sid < sample_pred.size(0)) {
+                map_acc[y][x] = pred_acc[sid];
+            }
+        }
+    }
+
+
+    auto forecast_rgb = ColorizeClassMap(pred_map);
+    auto gt_one_hot = ConvertRgbMasksToOneHot(sample_target.unsqueeze(0));
+    auto gt_rgb = ColorizeClassMap(gt_one_hot.argmax(1).squeeze(0));
 
     Nott::Plot::Data::Image(forecast_rgb, {0});
     Nott::Plot::Data::Image(gt_rgb, {0});
-    Nott::Plot::Data::Image(X, {0});
+    Nott::Plot::Data::Image(sample_input, {0});
     // cv::Mat f_img(H, W, CV_8UC3, forecast_rgb.data_ptr<uint8_t>());
     // cv::Mat f_bgr;
     // cv::cvtColor(f_img, f_bgr, cv::COLOR_RGB2BGR);
