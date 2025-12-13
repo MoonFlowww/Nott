@@ -765,7 +765,7 @@ namespace Nott::Evaluation::Details::Classification {
         std::size_t top5_hits = 0;
         std::size_t total_correct = 0;
         std::size_t processed_samples = 0;
-
+        std::size_t ignored_samples = 0;
 
         double total_log_loss = 0.0;
         double total_brier = 0.0;
@@ -1026,7 +1026,6 @@ namespace Nott::Evaluation::Details::Classification {
             if (target_cpu.sizes() != predicted.sizes()) {
                 throw std::runtime_error("Evaluation targets and predictions must share the same leading shape.");
             }
-            processed_samples += current_batch;
             auto pred_accessor = predicted.template accessor<long, 1>();
             auto target_accessor = target_cpu.template accessor<long, 1>();
             torch::TensorAccessor<long, 2> topk_accessor{nullptr, nullptr, nullptr};
@@ -1039,12 +1038,14 @@ namespace Nott::Evaluation::Details::Classification {
                 const auto pred = pred_accessor[i];
 
                 if (label < 0 || label >= static_cast<long>(num_classes)) {
-                    throw std::out_of_range("Encountered classification target outside the configured range.");
+                    ignored_samples += 1;
+                    continue;
                 }
                 if (pred < 0 || pred >= static_cast<long>(num_classes)) {
-                    throw std::out_of_range("Encountered classification prediction outside the configured range.");
+                    ignored_samples += 1;
+                    continue;
                 }
-
+                processed_samples += 1;
                 const auto label_index = static_cast<std::size_t>(label);
                 const auto pred_index = static_cast<std::size_t>(pred);
 
@@ -1238,6 +1239,12 @@ namespace Nott::Evaluation::Details::Classification {
         };
 
         model.stream_forward(inputs, targets, streaming_options, prepare_batch, process_batch);
+        if (ignored_samples > 0 && options.stream != nullptr) {
+            (*options.stream) << "Warning: ignored " << ignored_samples
+                              << " sample" << (ignored_samples == 1 ? "" : "s")
+                              << " with out-of-range labels or predictions during evaluation.\n";
+        }
+
         total_samples = processed_samples;
         report.total_samples = total_samples;
         if (total_samples == 0) {

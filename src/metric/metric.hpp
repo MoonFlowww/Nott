@@ -1,6 +1,6 @@
 #ifndef Nott_METRIC_HPP
 #define Nott_METRIC_HPP
-// This file is an factory, must exempt it from any logical-code. For functions look into "/details"
+
 namespace Nott::Metric::Classification {
     enum class Kind {
         Accuracy,
