@@ -21,11 +21,13 @@ int main() {
         Nott::Optimizer::AdamW({.learning_rate = 1e-3}),
         Nott::LrScheduler::CosineAnnealing({.T_max = 50})
     );
+
     model.set_loss(Nott::Loss::MSE({}));
-    auto [train_images, train_labels, test_images, test_labels] =
-        Nott::Data::Load::MNIST("./datasets", 1.f, 1.f, true);
+
+    auto [train_images, train_labels, test_images, test_labels] = Nott::Data::Load::MNIST("./datasets", 1.f, 1.f, true);
         
     model.train(train_images, train_labels, {.epoch = 10, .batch_size = 64});
+
     model.evaluate(test_images, test_labels, Nott::Evaluation::Classification, {
         Nott::Metric::Classification::Precision,
         Nott::Metric::Classification::F1,
