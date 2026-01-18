@@ -93,14 +93,15 @@ add_library(Nott SHARED
         src/initialization/apply.hpp
         src/loss/details/reduction.hpp
         src/layer/registry.hpp
-        src/optimizer/registry.hpp)
+        src/optimizer/registry.hpp
+        test/analysis/overhead.cpp)
 
 
 target_link_libraries(Nott "${TORCH_LIBRARIES}" Boost::filesystem ${OpenCV_LIBS})
 target_include_directories(Nott PUBLIC ${CMAKE_SOURCE_DIR}/include ${TORCH_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
 
 #Test
-add_executable(test_Nott  test/classification/masks/dubai_segment.cpp #analysis/ntk.cpp #classification/timeseries/ptbxl.cpp #regression/timeseries/etth.cpp #
+add_executable(test_Nott  test/classification/images/cifar10.cpp #analysis/overhead.cpp #classification/masks/dubai_segment.cpp #analysis/ntk.cpp #classification/timeseries/ptbxl.cpp #regression/timeseries/etth.cpp #
         src/block/details/blocks/residual.hpp
         src/block/details/blocks/sequential.hpp
         src/lrscheduler/details/common.hpp

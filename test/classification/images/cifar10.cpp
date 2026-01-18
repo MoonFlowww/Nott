@@ -123,7 +123,6 @@ int main() {
         Nott::Metric::Classification::LogLoss,
         Nott::Metric::Classification::BrierScore,
         Nott::Metric::Classification::Informedness,
-        Nott::Metric::Timeseries::
     }, {.batch_size = 64});
 
     Nott::Plot::Render(model, Nott::Plot::Reliability::GradCAM({.samples = 4, .random = false, .normalize = true, .overlay = true}),
