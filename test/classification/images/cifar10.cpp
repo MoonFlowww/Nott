@@ -83,16 +83,16 @@ int main() {
 
     auto [x1, y1, x2, y2] = Nott::Data::Load::CIFAR10("/home/moonfloww/Projects/DATASETS/Image/CIFAR10", 1.f, 1.f, true);
     auto [validation_images, validation_labels] = Nott::Data::Manipulation::Fraction(x2, y2, 0.1f);
-    Nott::Data::Check::Size(x1, "Raw");
-    std::tie(x1, y1) = Nott::Data::Transform::Augmentation::CLAHE(x1, y1, {256, 2.f, {4,4}, 1.f, true});
-    std::tie(x1, y1) = Nott::Data::Manipulation::Cutout(x1, y1, {{-1, -1}, {12, 12}, {-1,-1,-1}, .5f, false, false});
-    std::tie(x1, y1) = Nott::Data::Manipulation::Cutout(x1, y1, {{-1, -1}, {12, 12}, {-1,-1,-1}, 1.f, false, false});
-    std::tie(x1, y1) = Nott::Data::Manipulation::Cutout(x1, y1, {{-1, -1}, {6, 6}, {-1,-1,-1}, 1.f, false, false});
-    std::tie(x1, y1) = Nott::Data::Manipulation::Cutout(x1, y1, {{-1, -1}, {6, 6}, {-1,-1,-1}, 1.f, false, false});
-    std::tie(x1, y1) = Nott::Data::Manipulation::Shuffle(x1, y1);
-
-    std::tie(x1, y1) = Nott::Data::Manipulation::Flip(x1, y1, {{"x"}, 1.f, true, false});
-    std::tie(x1, y1) = Nott::Data::Manipulation::Shuffle(x1, y1);
+    // Nott::Data::Check::Size(x1, "Raw");
+    // std::tie(x1, y1) = Nott::Data::Transform::Augmentation::CLAHE(x1, y1, {256, 2.f, {4,4}, 1.f, true});
+    // std::tie(x1, y1) = Nott::Data::Manipulation::Cutout(x1, y1, {{-1, -1}, {12, 12}, {-1,-1,-1}, .5f, false, false});
+    // std::tie(x1, y1) = Nott::Data::Manipulation::Cutout(x1, y1, {{-1, -1}, {12, 12}, {-1,-1,-1}, 1.f, false, false});
+    // std::tie(x1, y1) = Nott::Data::Manipulation::Cutout(x1, y1, {{-1, -1}, {6, 6}, {-1,-1,-1}, 1.f, false, false});
+    // std::tie(x1, y1) = Nott::Data::Manipulation::Cutout(x1, y1, {{-1, -1}, {6, 6}, {-1,-1,-1}, 1.f, false, false});
+    // std::tie(x1, y1) = Nott::Data::Manipulation::Shuffle(x1, y1);
+    //
+    // std::tie(x1, y1) = Nott::Data::Manipulation::Flip(x1, y1, {{"x"}, 1.f, true, false});
+    // std::tie(x1, y1) = Nott::Data::Manipulation::Shuffle(x1, y1);
 
     Nott::Data::Check::Size(x1, "Augmented");
     Nott::Plot::Data::Image(x1, {1,2,3,4,5,6,7,8,9}); //idx

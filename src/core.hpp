@@ -87,7 +87,6 @@
 #include "lrscheduler/lrscheduler.hpp"
 #include "block/block.hpp"
 #include "layer/details/positional_encoding.hpp"
-#include "../src/ntk/ntk.hpp"
 #include "regularization/regularization.hpp"
 #include "regularization/apply.hpp"
 #include "calibration/calibration.hpp"
@@ -199,8 +198,6 @@ namespace Nott {
             OptimizerBinding &operator=(const OptimizerBinding &) = delete;
         };
 
-
-        s
         struct RegularizationBinding {
             Regularization::Descriptor descriptor{};
             RegularizationStateStorage states{};
