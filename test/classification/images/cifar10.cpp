@@ -15,48 +15,124 @@ int main() {
     const int64_t steps_per_epoch = (N + B - 1) / B;
 
     
-    model.add(Nott::Block::Sequential({
-        Nott::Layer::Conv2d({3, 64, {3, 3}, {1, 1}, {1, 1}, {1, 1}, 1, false}, Nott::Activation::Identity, Nott::Initialization::HeNormal),
-        Nott::Layer::BatchNorm2d({64, 1e-5, 0.1, true, true}, Nott::Activation::SiLU),
-        Nott::Layer::Conv2d({64, 64, {3, 3}, {1, 1}, {1, 1}, {1, 1}, 1, true}, Nott::Activation::Identity, Nott::Initialization::HeNormal),
-        Nott::Layer::BatchNorm2d({64, 1e-5, 0.1, true, true}, Nott::Activation::SiLU),
-        Nott::Layer::MaxPool2d({{2, 2}, {2, 2}})
-    }));
+    constexpr int kNumMetrics      = 5;
+    constexpr int kInputChannels   = 3 * kNumMetrics;   // e.g. (min,max,mean,std,skew) per RGB channel
+    constexpr int kNumClasses      = 6;                 // adjust as needed
 
-    model.add(Nott::Layer::HardDropout({ .probability = 0.3 }));
+    // 2x Conv block, first conv can be strided for downsampling
+    auto block = [&](int in_c, int out_c, int stride_first = 1) {
+        return Nott::Block::Sequential({
+            Nott::Layer::Conv2d(
+                {in_c, out_c, {3,3}, {stride_first, stride_first}, {1,1}},
+                Nott::Activation::GeLU,
+                Nott::Initialization::HeUniform
+            ),
+            Nott::Layer::Conv2d(
+                {out_c, out_c, {3,3}, {1,1}, {1,1}},
+                Nott::Activation::GeLU,
+                Nott::Initialization::HeUniform
+            ),
+        });
+    };
 
-    model.add(Nott::Block::Residual({
-        Nott::Layer::Conv2d({64, 64, {3, 3}, {1, 1}, {1, 1}, {1, 1}, 1, false}, Nott::Activation::Identity, Nott::Initialization::HeNormal),
-        Nott::Layer::BatchNorm2d({64, 1e-5, 0.1, true, true}, Nott::Activation::SiLU),
-        Nott::Layer::Conv2d({64, 64, {3, 3}, {1, 1}, {1, 1}, {1, 1}, 1, true}, Nott::Activation::Identity, Nott::Initialization::HeNormal)
-    }, 3, {}, { .final_activation = Nott::Activation::SiLU }));
+    // 1x1 projection (useful to align skip channels for Add merges)
+    auto proj1x1 = [&](int in_c, int out_c) {
+        return Nott::Block::Sequential({
+            Nott::Layer::Conv2d(
+                {in_c, out_c, {1,1}, {1,1}, {0,0}},
+                Nott::Activation::Identity,
+                Nott::Initialization::HeUniform
+            ),
+        });
+    };
 
-    model.add(Nott::Block::Residual({
-        Nott::Layer::Conv2d({64, 128, {3, 3}, {2, 2}, {1, 1}, {1, 1}, 1, false}, Nott::Activation::Identity, Nott::Initialization::HeNormal),
-        Nott::Layer::BatchNorm2d({128, 1e-5, 0.1, true, true}, Nott::Activation::SiLU),
-        Nott::Layer::Conv2d({128, 128, {3, 3}, {1, 1}, {1, 1}, {1, 1}, 1, true}, Nott::Activation::Identity, Nott::Initialization::HeNormal)
-    }, 1, {.projection = Nott::Layer::Conv2d({64, 128, {1, 1}, {2, 2}, {0, 0}, {1, 1}, 1, false}, Nott::Activation::Identity, Nott::Initialization::HeNormal)}, { .final_activation = Nott::Activation::SiLU }));
+    // Upsample + 3x3 conv
+    auto upblock = [&](int in_c, int out_c) {
+        return Nott::Block::Sequential({
+            Nott::Layer::Upsample({.scale = {2,2}, .mode = Nott::UpsampleMode::Bilinear}),
+            Nott::Layer::Conv2d(
+                {in_c, out_c, {3,3}, {1,1}, {1,1}},
+                Nott::Activation::GeLU,
+                Nott::Initialization::HeUniform
+            ),
+        });
+    };
 
-    model.add(Nott::Layer::HardDropout({ .probability = 0.3 }));
+    // --------------------
+    // Model modules
+    // --------------------
 
-    model.add(Nott::Block::Sequential({
-        Nott::Layer::Conv2d({128, 256, {3, 3}, {1, 1}, {1, 1}, {1, 1}, 1, false}, Nott::Activation::Identity, Nott::Initialization::HeNormal),
-        Nott::Layer::BatchNorm2d({256, 1e-5, 0.1, true, true}, Nott::Activation::SiLU),
-        Nott::Layer::AdaptiveAvgPool2d({{1, 1}})
-    }));
+    // Stem + Encoder (down via stride=2 conv)
+    model.add(block(kInputChannels, 64, 1), "enc1");      // H   x W   x 64
+    model.add(block(64, 128, 2),          "enc2");        // H/2 x W/2 x 128
+    model.add(block(128, 256, 2),         "enc3");        // H/4 x W/4 x 256
+    model.add(block(256, 512, 2),         "enc4");        // H/8 x W/8 x 512
 
-    model.add(Nott::Block::Sequential({
-        Nott::Layer::Conv2d({256, 128, {3, 3}, {1, 1}, {1, 1}, {1, 1}, 1, false}, Nott::Activation::Identity, Nott::Initialization::HeNormal),
-        Nott::Layer::BatchNorm2d({128, 1e-5, 0.1, true, true}, Nott::Activation::SiLU),
-        Nott::Layer::AdaptiveAvgPool2d({{1, 1}})
-    }));
+    // Bottleneck (deeper but not too wide for throughput)
+    model.add(block(512, 768, 2),         "bn0");         // H/16 x W/16 x 768
+    model.add(block(768, 768, 1),         "bn1");         // H/16 x W/16 x 768
 
-    model.add(Nott::Layer::Flatten());
+    // Decoder
+    model.add(upblock(768, 512),          "up4");         // H/8 x W/8 x 512
+    model.add(upblock(512, 256),          "up3");         // H/4 x W/4 x 256
+    model.add(upblock(256, 128),          "up2");         // H/2 x W/2 x 128
+    model.add(upblock(128, 64),           "up1");         // H   x W   x 64
 
-    model.add(Nott::Layer::FC({128, 512, true}, Nott::Activation::SiLU, Nott::Initialization::HeNormal));
-    model.add(Nott::Layer::HardDropout({.probability = 0.5}));
-    model.add(Nott::Layer::FC({512, 10, true}, Nott::Activation::Identity, Nott::Initialization::HeNormal));
+    // Skip projections for ADD-style merges (recommended if supported)
+    model.add(proj1x1(512, 512),          "sk4");
+    model.add(proj1x1(256, 256),          "sk3");
+    model.add(proj1x1(128, 128),          "sk2");
+    model.add(proj1x1(64,   64),          "sk1");
 
+    // If you can do additive merges: dec blocks take in_c == out_c (faster than concat).
+    // If you must concat (Stack): change dec in_c to 2*out_c and use Stack joins instead.
+    model.add(block(512, 512, 1),         "dec4");
+    model.add(block(256, 256, 1),         "dec3");
+    model.add(block(128, 128, 1),         "dec2");
+    model.add(block(64,   64, 1),         "dec1");
+
+    // Head
+    model.add(Nott::Layer::Conv2d(
+        {64, kNumClasses, {1,1}, {1,1}, {0,0}},
+        Nott::Activation::Identity
+    ), "logits");
+
+    model.links({
+        // encoder path
+        Nott::LinkSpec{Nott::Port::Input("@input"), Nott::Port::Module("enc1")},
+        Nott::LinkSpec{Nott::Port::Module("enc1"),  Nott::Port::Module("enc2")},
+        Nott::LinkSpec{Nott::Port::Module("enc2"),  Nott::Port::Module("enc3")},
+        Nott::LinkSpec{Nott::Port::Module("enc3"),  Nott::Port::Module("enc4")},
+        Nott::LinkSpec{Nott::Port::Module("enc4"),  Nott::Port::Module("bn0")},
+        Nott::LinkSpec{Nott::Port::Module("bn0"),   Nott::Port::Module("bn1")},
+
+        // decoder path
+        Nott::LinkSpec{Nott::Port::Module("bn1"),   Nott::Port::Module("up4")},
+        Nott::LinkSpec{Nott::Port::Module("up4"),   Nott::Port::Module("dec4")},
+
+        Nott::LinkSpec{Nott::Port::Module("dec4"),  Nott::Port::Module("up3")},
+        Nott::LinkSpec{Nott::Port::Module("up3"),   Nott::Port::Module("dec3")},
+
+        Nott::LinkSpec{Nott::Port::Module("dec3"),  Nott::Port::Module("up2")},
+        Nott::LinkSpec{Nott::Port::Module("up2"),   Nott::Port::Module("dec2")},
+
+        Nott::LinkSpec{Nott::Port::Module("dec2"),  Nott::Port::Module("up1")},
+        Nott::LinkSpec{Nott::Port::Module("up1"),   Nott::Port::Module("dec1")},
+
+        // --- skip projections ---
+        Nott::LinkSpec{Nott::Port::Module("enc4"),  Nott::Port::Module("sk4")},
+        Nott::LinkSpec{Nott::Port::Module("enc3"),  Nott::Port::Module("sk3")},
+        Nott::LinkSpec{Nott::Port::Module("enc2"),  Nott::Port::Module("sk2")},
+        Nott::LinkSpec{Nott::Port::Module("enc1"),  Nott::Port::Module("sk1")},
+
+        Nott::LinkSpec{Nott::Port::Join({"up4", "sk4"}, Nott::MergePolicy::Broadcast),   Nott::Port::Module("dec4")},
+        Nott::LinkSpec{Nott::Port::Join({"up3", "sk3"}, Nott::MergePolicy::Broadcast),   Nott::Port::Module("dec3")},
+        Nott::LinkSpec{Nott::Port::Join({"up2", "sk2"}, Nott::MergePolicy::Broadcast),   Nott::Port::Module("dec2")},
+        Nott::LinkSpec{Nott::Port::Join({"up1", "sk1"}, Nott::MergePolicy::Broadcast),   Nott::Port::Module("dec1")},
+
+        Nott::LinkSpec{Nott::Port::Module("dec1"),   Nott::Port::Module("logits")},
+        Nott::LinkSpec{Nott::Port::Module("logits"), Nott::Port::Output("@output")},
+    }, true);
 
     model.set_optimizer(
         Nott::Optimizer::AdamW({.learning_rate=1e-4, .weight_decay=5e-4}),
