@@ -200,8 +200,5 @@ add_executable(test_Nott  test/classification/images/cifar10.cpp #analysis/overh
         src/attention/details/latent.hpp
         src/attention/builder.hpp
         src/ntk/ntk.hpp
-        src/solver/solver.hpp
-        src/solver/details/sde.hpp
-        src/solver/details/ode.hpp
 )
 target_link_libraries(test_Nott PRIVATE Nott ${OpenCV_LIBS})
