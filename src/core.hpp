@@ -4208,12 +4208,149 @@ namespace Nott {
                     return tensor;
                 };
 
+                struct TensorBatchLoader {
+                    TensorDataset &dataset;
+                    std::int64_t batch_extent;
+                    bool shuffle;
+                    bool drop_last_batches;
+                    torch::TensorOptions index_options;
+                    torch::Tensor epoch_indices;
+                    std::int64_t offset{0};
+                    std::int64_t total_samples{0};
+                    std::function<torch::Tensor(torch::Tensor, bool)> ensure_layout;
+                    bool channels_last_inputs;
+
+                    TensorBatchLoader(TensorDataset &dataset,
+                                      std::int64_t batch_extent,
+                                      bool shuffle,
+                                      bool drop_last_batches,
+                                      torch::TensorOptions index_options,
+                                      std::function<torch::Tensor(torch::Tensor, bool)> ensure_layout,
+                                      bool channels_last_inputs)
+                        : dataset(dataset),
+                          batch_extent(batch_extent),
+                          shuffle(shuffle),
+                          drop_last_batches(drop_last_batches),
+                          index_options(std::move(index_options)),
+                          total_samples(dataset.inputs.size(0)),
+                          ensure_layout(std::move(ensure_layout)),
+                          channels_last_inputs(channels_last_inputs) {
+                    }
+
+                    void start_epoch(std::size_t /*epoch*/) {
+                        offset = 0;
+                        if (shuffle) {
+                            if (total_samples > 1) {
+                                epoch_indices = torch::randperm(total_samples, index_options);
+                            } else {
+                                epoch_indices = torch::arange(total_samples, index_options);
+                            }
+                        } else {
+                            epoch_indices = {};
+                        }
+                    }
+
+                    [[nodiscard]] bool has_next() const {
+                        if (batch_extent <= 0) {
+                            return false;
+                        }
+                        if (drop_last_batches) {
+                            return offset + batch_extent <= total_samples;
+                        }
+                        return offset < total_samples;
+                    }
+
+                    [[nodiscard]] std::pair<torch::Tensor, torch::Tensor> next_batch() {
+                        if (!has_next()) {
+                            return {};
+                        }
+                        const auto remaining = total_samples - offset;
+                        const auto current_batch = drop_last_batches
+                                                       ? batch_extent
+                                                       : std::min<std::int64_t>(batch_extent, remaining);
+                        if (current_batch <= 0) {
+                            return {};
+                        }
+
+                        torch::Tensor batch_inputs;
+                        torch::Tensor batch_targets;
+                        if (shuffle) {
+                            auto batch_indices = epoch_indices.narrow(0, offset, current_batch);
+                            if (!batch_indices.device().is_cpu()) {
+                                batch_indices = batch_indices.to(torch::kCPU);
+                            }
+                            batch_inputs = dataset.inputs.index_select(0, batch_indices);
+                            batch_targets = dataset.targets.index_select(0, batch_indices);
+                        } else {
+                            batch_inputs = dataset.inputs.narrow(0, offset, current_batch);
+                            batch_targets = dataset.targets.narrow(0, offset, current_batch);
+                        }
+
+                        offset += current_batch;
+
+                        batch_inputs = ensure_layout(std::move(batch_inputs), channels_last_inputs);
+                        batch_targets = ensure_layout(std::move(batch_targets), false);
+                        if (batch_inputs.device().is_cpu() && !batch_inputs.is_pinned()) {
+                            batch_inputs = batch_inputs.pin_memory();
+                        }
+                        if (batch_targets.device().is_cpu() && !batch_targets.is_pinned()) {
+                            batch_targets = batch_targets.pin_memory();
+                        }
+
+                        return std::pair<torch::Tensor, torch::Tensor>{
+                            std::move(batch_inputs), std::move(batch_targets)
+                        };
+                    }
+
+                    [[nodiscard]] std::size_t batch_size() const {
+                        return static_cast<std::size_t>(batch_extent);
+                    }
+
+                    [[nodiscard]] bool drop_last() const {
+                        return drop_last_batches;
+                    }
+
+                    [[nodiscard]] std::size_t total_batches() const {
+                        if (batch_extent <= 0 || total_samples <= 0) {
+                            return 0;
+                        }
+                        if (drop_last_batches) {
+                            return static_cast<std::size_t>(total_samples / batch_extent);
+                        }
+                        return static_cast<std::size_t>((total_samples + batch_extent - 1) / batch_extent);
+                    }
+                };
+
+                const bool drop_last_batches = false;
+                TensorBatchLoader loader(train_dataset,
+                                         batch_size,
+                                         ShouldShuffle,
+                                         drop_last_batches,
+                                         index_options,
+                                         ensure_layout,
+                                         channels_last_inputs);
+                if (graph_mode_enabled) {
+                    const auto loader_batch_size = static_cast<std::int64_t>(loader.batch_size());
+                    if (loader_batch_size != batch_size) {
+                        throw std::invalid_argument(
+                            "Graph optimisation requires the loader batch size to match the configured batch size ("
+                            + std::to_string(batch_size) + "). Received "
+                            + std::to_string(loader_batch_size) + ".");
+                    }
+                    if (!loader.drop_last() && (total_samples % batch_size != 0)) {
+                        throw std::invalid_argument(
+                            "Graph optimisation requires every batch to match the captured batch size ("
+                            + std::to_string(batch_size)
+                            + "). Drop the remainder or ensure the loader always returns fixed-size batches.");
+                    }
+                }
+
                 auto stage_to_device = [&](torch::Tensor tensor, torch::Tensor &buffer, bool apply_channels_last,
                                            bool force_non_blocking = false, bool use_prefetch_stream = false) {
-                    tensor = ensure_layout(std::move(tensor), apply_channels_last);
                     if (!tensor.defined() || tensor.device() == device) {
                         return tensor;
                     }
+                    tensor = ensure_layout(std::move(tensor), apply_channels_last);
                     auto options = tensor.options().device(device);
 
                     const bool non_blocking = force_non_blocking || tensor.is_pinned();
@@ -4292,14 +4429,7 @@ namespace Nott {
                 for (std::size_t epoch = 0; epoch < options.epoch; ++epoch) {
                     const auto epoch_start = std::chrono::steady_clock::now();
 
-                    torch::Tensor epoch_indices;
-                    if constexpr (ShouldShuffle) {
-                        if (total_samples > 1) {
-                            epoch_indices = torch::randperm(total_samples, index_options);
-                        } else {
-                            epoch_indices = torch::arange(total_samples, index_options);
-                        }
-                    }
+                    loader.start_epoch(epoch);
 
                     auto accumulation = torch::zeros({}, torch::TensorOptions().dtype(torch::kFloat64).device(device));
                     std::int64_t weight = 0;
@@ -4327,63 +4457,7 @@ namespace Nott {
 #endif
 
 
-                    const std::size_t total_batches = total_samples > 0
-                                                          ? static_cast<std::size_t>(
-                                                              (total_samples + batch_size - 1) / batch_size)
-                                                          : 0;
-
-                    auto fetch_batch = [&](std::size_t batch_index) {
-                        NvtxRange data_range("Nott::Model::train::data_preparation");
-                        const auto offset = static_cast<std::int64_t>(batch_index) * batch_size;
-                        const auto remaining = total_samples - offset;
-                        const auto current_batch = std::min<std::int64_t>(batch_size, remaining);
-                        if (current_batch <= 0)
-                            return std::pair<torch::Tensor, torch::Tensor>{torch::Tensor{}, torch::Tensor{}};
-
-                        if (graph_mode_enabled && current_batch != batch_size) {
-                            throw std::invalid_argument(
-                                "Graph optimisation requires every batch to match the captured batch size ("
-                                + std::to_string(batch_size)
-                                + "). Received " + std::to_string(current_batch)
-                                + " samples; pad or drop the remainder before enabling graph replay.");
-                        }
-
-
-                        torch::Tensor batch_inputs;
-                        torch::Tensor batch_targets;
-
-                        if constexpr (ShouldShuffle) {
-                            auto batch_indices = epoch_indices.narrow(0, offset, current_batch);
-                            if (!batch_indices.device().is_cpu()) {
-                                batch_indices = batch_indices.to(torch::kCPU);
-                            }
-                            batch_inputs = train_dataset.inputs.index_select(0, batch_indices);
-                            batch_targets = train_dataset.targets.index_select(0, batch_indices);
-                            batch_inputs = ensure_layout(std::move(batch_inputs), channels_last_inputs);
-                            batch_targets = ensure_layout(std::move(batch_targets), false);
-                            if (batch_inputs.device().is_cpu() && !batch_inputs.is_pinned()) {
-                                batch_inputs = batch_inputs.pin_memory();
-                            }
-                            if (batch_targets.device().is_cpu() && !batch_targets.is_pinned()) {
-                                batch_targets = batch_targets.pin_memory();
-                            }
-                        } else {
-                            batch_inputs = train_dataset.inputs.narrow(0, offset, current_batch);
-                            batch_targets = train_dataset.targets.narrow(0, offset, current_batch);
-                            batch_inputs = ensure_layout(std::move(batch_inputs), channels_last_inputs);
-                            batch_targets = ensure_layout(std::move(batch_targets), false);
-                            if (batch_inputs.device().is_cpu() && !batch_inputs.is_pinned()) {
-                                batch_inputs = batch_inputs.pin_memory();
-                            }
-                            if (batch_targets.device().is_cpu() && !batch_targets.is_pinned()) {
-                                batch_targets = batch_targets.pin_memory();
-                            }
-                        }
-
-                        return std::pair<torch::Tensor, torch::Tensor>{
-                            std::move(batch_inputs), std::move(batch_targets)
-                        };
-                    };
+                    const std::size_t total_batches = loader.total_batches();
 
                     auto resolve_batch_signature = [&](std::int64_t batch_size,
                                                        const torch::Tensor &inputs,
@@ -4528,10 +4602,10 @@ namespace Nott {
                             if (prefetch_state) {
                                 std::size_t next_batch_index = 0;
                                 auto provider = [&]() -> std::pair<torch::Tensor, torch::Tensor> {
-                                    if (next_batch_index >= total_batches) {
+                                    if (next_batch_index >= total_batches || !loader.has_next()) {
                                         return {};
                                     }
-                                    auto batch = fetch_batch(next_batch_index);
+                                    auto batch = loader.next_batch();
                                     ++next_batch_index;
                                     return batch;
                                 };
@@ -4548,17 +4622,15 @@ namespace Nott {
                             }
                         } else {
                             std::deque<std::pair<torch::Tensor, torch::Tensor> > buffered_batches;
-                            std::size_t next_batch_to_load = 0;
                             const std::size_t max_batches = total_batches == 0 ? 1 : total_batches;
                             const std::size_t buffer_limit = std::max<std::size_t>(1,
                                 std::min<std::size_t>(options.buffer_vram + 1, max_batches));
 
                             auto maintain_buffer = [&](std::size_t current_index) {
                                 const std::size_t desired_size = std::min(buffer_limit, total_batches - current_index);
-                                while (buffered_batches.size() < desired_size && next_batch_to_load < total_batches) {
-                                    auto batch = fetch_batch(next_batch_to_load);
+                                while (buffered_batches.size() < desired_size && loader.has_next()) {
+                                    auto batch = loader.next_batch();
                                     buffered_batches.push_back(std::move(batch));
-                                    ++next_batch_to_load;
                                 }
                             };
 
@@ -4603,10 +4675,10 @@ namespace Nott {
                         if (prefetch_state) {
                             std::size_t next_batch_index = 0;
                             auto provider = [&]() -> std::pair<torch::Tensor, torch::Tensor> {
-                                if (next_batch_index >= total_batches) {
+                                if (next_batch_index >= total_batches || !loader.has_next()) {
                                     return {};
                                 }
-                                auto batch = fetch_batch(next_batch_index);
+                                auto batch = loader.next_batch();
                                 ++next_batch_index;
                                 return batch;
                             };
@@ -4615,7 +4687,7 @@ namespace Nott {
 #endif
                         {
                             for (std::size_t batch_index = 0; batch_index < total_batches; ++batch_index) {
-                                auto batch_pair = fetch_batch(batch_index);
+                                auto batch_pair = loader.next_batch();
                                 const auto processed = process_batch(std::move(batch_pair.first),
                                                                      std::move(batch_pair.second));
                                 weight += processed;
@@ -4839,10 +4911,10 @@ namespace Nott {
                 torch::Tensor device_batch_targets_buffer;
 
                 auto stage_to_device = [&](torch::Tensor tensor, torch::Tensor &buffer, bool apply_channels_last) {
-                    tensor = ensure_layout(std::move(tensor), apply_channels_last);
                     if (!tensor.defined() || tensor.device() == device) {
                         return tensor;
                     }
+                    tensor = ensure_layout(std::move(tensor), apply_channels_last);
 
                     auto options = tensor.options().device(device);
                     const bool non_blocking = tensor.is_pinned();
