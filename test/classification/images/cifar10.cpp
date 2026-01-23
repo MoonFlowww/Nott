@@ -9,17 +9,24 @@ int main() {
     Nott::Model model("Debug_CIFAR");
     model.use_cuda(torch::cuda::is_available());
 
-    const int64_t N = 200000;
+    auto [x1, y1, x2, y2] = Nott::Data::Load::MNIST("/home/moonfloww/Projects/DATASETS/Image/MNIST", .2f, 1.f, true);
+    auto [validation_images, validation_labels] = Nott::Data::Manipulation::Fraction(x1, y1, 0.1f);
+    // Nott::Data::Check::Size(x1, "Raw");
+    // std::tie(x1, y1) = Nott::Data::Transform::Augmentation::CLAHE(x1, y1, {256, 2.f, {4,4}, 1.f, true});
+    // std::tie(x1, y1) = Nott::Data::Manipulation::Cutout(x1, y1, {{-1, -1}, {12, 12}, {-1,-1,-1}, .5f, false, false});
+    // std::tie(x1, y1) = Nott::Data::Manipulation::Cutout(x1, y1, {{-1, -1}, {12, 12}, {-1,-1,-1}, 1.f, false, false});
+    // std::tie(x1, y1) = Nott::Data::Manipulation::Cutout(x1, y1, {{-1, -1}, {6, 6}, {-1,-1,-1}, 1.f, false, false});
+    // std::tie(x1, y1) = Nott::Data::Manipulation::Cutout(x1, y1, {{-1, -1}, {6, 6}, {-1,-1,-1}, 1.f, false, false});
+    // std::tie(x1, y1) = Nott::Data::Manipulation::Shuffle(x1, y1);
+    //
+    // std::tie(x1, y1) = Nott::Data::Manipulation::Flip(x1, y1, {{"x"}, 1.f, true, false});
+    // std::tie(x1, y1) = Nott::Data::Manipulation::Shuffle(x1, y1);
+
+    const int64_t N = x1.size(0);
     const int64_t B = std::pow(2,7);
-    const int64_t epochs = 50;
+    const int64_t epochs = 25;
     const int64_t steps_per_epoch = (N + B - 1) / B;
 
-    
-    constexpr int kNumMetrics      = 5;
-    constexpr int kInputChannels   = 3 * kNumMetrics;   // e.g. (min,max,mean,std,skew) per RGB channel
-    constexpr int kNumClasses      = 6;                 // adjust as needed
-
-    // 2x Conv block, first conv can be strided for downsampling
     auto block = [&](int in_c, int out_c, int stride_first = 1) {
         return Nott::Block::Sequential({
             Nott::Layer::Conv2d(
@@ -38,11 +45,7 @@ int main() {
     // 1x1 projection (useful to align skip channels for Add merges)
     auto proj1x1 = [&](int in_c, int out_c) {
         return Nott::Block::Sequential({
-            Nott::Layer::Conv2d(
-                {in_c, out_c, {1,1}, {1,1}, {0,0}},
-                Nott::Activation::Identity,
-                Nott::Initialization::HeUniform
-            ),
+            Nott::Layer::Conv2d({in_c, out_c, {1,1}, {1,1}, {0,0}}, Nott::Activation::Identity, Nott::Initialization::HeUniform),
         });
     };
 
@@ -50,125 +53,88 @@ int main() {
     auto upblock = [&](int in_c, int out_c) {
         return Nott::Block::Sequential({
             Nott::Layer::Upsample({.scale = {2,2}, .mode = Nott::UpsampleMode::Bilinear}),
-            Nott::Layer::Conv2d(
-                {in_c, out_c, {3,3}, {1,1}, {1,1}},
-                Nott::Activation::GeLU,
-                Nott::Initialization::HeUniform
-            ),
+            Nott::Layer::Conv2d({in_c, out_c, {3,3}, {1,1}, {1,1}}, Nott::Activation::SiLU, Nott::Initialization::HeUniform),
         });
     };
 
-    // --------------------
-    // Model modules
-    // --------------------
+    // Encoder
+    model.add(block(1,   64, 1), "enc1");   // 28x28,  64
+    model.add(block(64, 128, 2), "enc2");   // 14x14, 128
+    model.add(block(128,256, 2), "enc3");   //  7x7, 256
 
-    // Stem + Encoder (down via stride=2 conv)
-    model.add(block(kInputChannels, 64, 1), "enc1");      // H   x W   x 64
-    model.add(block(64, 128, 2),          "enc2");        // H/2 x W/2 x 128
-    model.add(block(128, 256, 2),         "enc3");        // H/4 x W/4 x 256
-    model.add(block(256, 512, 2),         "enc4");        // H/8 x W/8 x 512
+    // Bottleneck at 7x7
+    model.add(block(256,512, 1), "bn0");    // 7x7, 512
+    model.add(block(512,512, 1), "bn1");    // 7x7, 512
 
-    // Bottleneck (deeper but not too wide for throughput)
-    model.add(block(512, 768, 2),         "bn0");         // H/16 x W/16 x 768
-    model.add(block(768, 768, 1),         "bn1");         // H/16 x W/16 x 768
+    // Decoder upsample stages
+    model.add(upblock(512,256),  "up2");    // 14x14, 256
+    model.add(upblock(256,128),  "up1");    // 28x28, 128
 
-    // Decoder
-    model.add(upblock(768, 512),          "up4");         // H/8 x W/8 x 512
-    model.add(upblock(512, 256),          "up3");         // H/4 x W/4 x 256
-    model.add(upblock(256, 128),          "up2");         // H/2 x W/2 x 128
-    model.add(upblock(128, 64),           "up1");         // H   x W   x 64
+    // Skip projections MUST match decoder channels at that resolution
+    model.add(proj1x1(128,256),  "sk2");    // enc2: 14x14, 128 -> 256  (to add with up2)
+    model.add(proj1x1(64, 128),  "sk1");    // enc1: 28x28,  64 -> 128  (to add with up1)
 
-    // Skip projections for ADD-style merges (recommended if supported)
-    model.add(proj1x1(512, 512),          "sk4");
-    model.add(proj1x1(256, 256),          "sk3");
-    model.add(proj1x1(128, 128),          "sk2");
-    model.add(proj1x1(64,   64),          "sk1");
-
-    // If you can do additive merges: dec blocks take in_c == out_c (faster than concat).
-    // If you must concat (Stack): change dec in_c to 2*out_c and use Stack joins instead.
-    model.add(block(512, 512, 1),         "dec4");
-    model.add(block(256, 256, 1),         "dec3");
-    model.add(block(128, 128, 1),         "dec2");
-    model.add(block(64,   64, 1),         "dec1");
+    // Decoder refinement after skip-add
+    model.add(block(256,256, 1), "dec2");   // 14x14, 256
+    model.add(block(128,128, 1), "dec1");   // 28x28, 128
 
     // Head
-    model.add(Nott::Layer::Conv2d(
-        {64, kNumClasses, {1,1}, {1,1}, {0,0}},
-        Nott::Activation::Identity
-    ), "logits");
+    model.add(Nott::Layer::Conv2d({128, 10, {1,1}, {1,1}, {0,0}}, Nott::Activation::Identity), "logits");
+    model.add(Nott::Layer::AdaptiveAvgPool2d({.output_size = {1,1}}), "gap");
+    model.add(Nott::Layer::Flatten(), "flatten");
 
+    // Graph links
     model.links({
         // encoder path
-        Nott::LinkSpec{Nott::Port::Input("@input"), Nott::Port::Module("enc1")},
-        Nott::LinkSpec{Nott::Port::Module("enc1"),  Nott::Port::Module("enc2")},
-        Nott::LinkSpec{Nott::Port::Module("enc2"),  Nott::Port::Module("enc3")},
-        Nott::LinkSpec{Nott::Port::Module("enc3"),  Nott::Port::Module("enc4")},
-        Nott::LinkSpec{Nott::Port::Module("enc4"),  Nott::Port::Module("bn0")},
-        Nott::LinkSpec{Nott::Port::Module("bn0"),   Nott::Port::Module("bn1")},
+        {Nott::Port::Input("@input"),  Nott::Port::Module("enc1")},
+        {Nott::Port::Module("enc1"),   Nott::Port::Module("enc2")},
+        {Nott::Port::Module("enc2"),   Nott::Port::Module("enc3")},
+        {Nott::Port::Module("enc3"),   Nott::Port::Module("bn0")},
+        {Nott::Port::Module("bn0"),    Nott::Port::Module("bn1")},
 
         // decoder path
-        Nott::LinkSpec{Nott::Port::Module("bn1"),   Nott::Port::Module("up4")},
-        Nott::LinkSpec{Nott::Port::Module("up4"),   Nott::Port::Module("dec4")},
+        {Nott::Port::Module("bn1"),    Nott::Port::Module("up2")},
+        {Nott::Port::Module("dec2"),   Nott::Port::Module("up1")},
 
-        Nott::LinkSpec{Nott::Port::Module("dec4"),  Nott::Port::Module("up3")},
-        Nott::LinkSpec{Nott::Port::Module("up3"),   Nott::Port::Module("dec3")},
+        // skip projections
+        {Nott::Port::Module("enc2"),   Nott::Port::Module("sk2")},
+        {Nott::Port::Module("enc1"),   Nott::Port::Module("sk1")},
 
-        Nott::LinkSpec{Nott::Port::Module("dec3"),  Nott::Port::Module("up2")},
-        Nott::LinkSpec{Nott::Port::Module("up2"),   Nott::Port::Module("dec2")},
+        // joins (ADD) - channels now match
+        {Nott::Port::Join({"up2","sk2"}, Nott::MergePolicy::Broadcast), Nott::Port::Module("dec2")},
+        {Nott::Port::Join({"up1","sk1"}, Nott::MergePolicy::Broadcast), Nott::Port::Module("dec1")},
 
-        Nott::LinkSpec{Nott::Port::Module("dec2"),  Nott::Port::Module("up1")},
-        Nott::LinkSpec{Nott::Port::Module("up1"),   Nott::Port::Module("dec1")},
-
-        // --- skip projections ---
-        Nott::LinkSpec{Nott::Port::Module("enc4"),  Nott::Port::Module("sk4")},
-        Nott::LinkSpec{Nott::Port::Module("enc3"),  Nott::Port::Module("sk3")},
-        Nott::LinkSpec{Nott::Port::Module("enc2"),  Nott::Port::Module("sk2")},
-        Nott::LinkSpec{Nott::Port::Module("enc1"),  Nott::Port::Module("sk1")},
-
-        Nott::LinkSpec{Nott::Port::Join({"up4", "sk4"}, Nott::MergePolicy::Broadcast),   Nott::Port::Module("dec4")},
-        Nott::LinkSpec{Nott::Port::Join({"up3", "sk3"}, Nott::MergePolicy::Broadcast),   Nott::Port::Module("dec3")},
-        Nott::LinkSpec{Nott::Port::Join({"up2", "sk2"}, Nott::MergePolicy::Broadcast),   Nott::Port::Module("dec2")},
-        Nott::LinkSpec{Nott::Port::Join({"up1", "sk1"}, Nott::MergePolicy::Broadcast),   Nott::Port::Module("dec1")},
-
-        Nott::LinkSpec{Nott::Port::Module("dec1"),   Nott::Port::Module("logits")},
-        Nott::LinkSpec{Nott::Port::Module("logits"), Nott::Port::Output("@output")},
+        // head
+        {Nott::Port::Module("dec1"),    Nott::Port::Module("logits")},
+        {Nott::Port::Module("logits"),  Nott::Port::Module("gap")},
+        {Nott::Port::Module("gap"),     Nott::Port::Module("flatten")},
+        {Nott::Port::Module("flatten"), Nott::Port::Output("@output")},
     }, true);
 
+
+
     model.set_optimizer(
-        Nott::Optimizer::AdamW({.learning_rate=1e-4, .weight_decay=5e-4}),
-            Nott::LrScheduler::CosineAnnealing({
-            .T_max = static_cast<size_t>(epochs*0.85) * steps_per_epoch,
-            .eta_min = 1e-5,
-            .warmup_steps = 5*static_cast<size_t>(steps_per_epoch),
-            .warmup_start_factor = 0.1
-        })
+        Nott::Optimizer::AdamW({.learning_rate=1e-2})
+        //     Nott::LrScheduler::CosineAnnealing({
+        //     .T_max = static_cast<size_t>(epochs) * steps_per_epoch,
+        //     .eta_min = 1e-6,
+        //     .warmup_steps = 2 * static_cast<size_t>(steps_per_epoch),
+        //     .warmup_start_factor = 0.01
+        // })
     );
 
-    model.set_loss(Nott::Loss::CrossEntropy({.label_smoothing=0.02f}));
+    model.set_loss(Nott::Loss::CrossEntropy({.label_smoothing=0.05f}));
 
-    model.set_regularization({ Nott::Regularization::SWAG({
-        .coefficient = 1e-3,
-        .variance_epsilon = 1e-6,
-        .start_step = static_cast<size_t>(0.85 * (steps_per_epoch*epochs)),
-        .accumulation_stride = static_cast<size_t>(steps_per_epoch),
-        .max_snapshots = 20,
-    }), Nott::Regularization::VAT({5})});
+    // model.set_regularization({
+    //     Nott::Regularization::SWAG({
+    //         .coefficient = 1e-4,
+    //         .variance_epsilon = 1e-6,
+    //         .start_step = static_cast<size_t>(0.80 * (steps_per_epoch * epochs)),
+    //         .accumulation_stride = static_cast<size_t>(steps_per_epoch),
+    //         .max_snapshots = 40,
+    //     })
+    // });
 
-
-    
-
-    auto [x1, y1, x2, y2] = Nott::Data::Load::CIFAR10("/home/moonfloww/Projects/DATASETS/Image/CIFAR10", 1.f, 1.f, true);
-    auto [validation_images, validation_labels] = Nott::Data::Manipulation::Fraction(x2, y2, 0.1f);
-    // Nott::Data::Check::Size(x1, "Raw");
-    // std::tie(x1, y1) = Nott::Data::Transform::Augmentation::CLAHE(x1, y1, {256, 2.f, {4,4}, 1.f, true});
-    // std::tie(x1, y1) = Nott::Data::Manipulation::Cutout(x1, y1, {{-1, -1}, {12, 12}, {-1,-1,-1}, .5f, false, false});
-    // std::tie(x1, y1) = Nott::Data::Manipulation::Cutout(x1, y1, {{-1, -1}, {12, 12}, {-1,-1,-1}, 1.f, false, false});
-    // std::tie(x1, y1) = Nott::Data::Manipulation::Cutout(x1, y1, {{-1, -1}, {6, 6}, {-1,-1,-1}, 1.f, false, false});
-    // std::tie(x1, y1) = Nott::Data::Manipulation::Cutout(x1, y1, {{-1, -1}, {6, 6}, {-1,-1,-1}, 1.f, false, false});
-    // std::tie(x1, y1) = Nott::Data::Manipulation::Shuffle(x1, y1);
-    //
-    // std::tie(x1, y1) = Nott::Data::Manipulation::Flip(x1, y1, {{"x"}, 1.f, true, false});
-    // std::tie(x1, y1) = Nott::Data::Manipulation::Shuffle(x1, y1);
 
     Nott::Data::Check::Size(x1, "Augmented");
     Nott::Plot::Data::Image(x1, {1,2,3,4,5,6,7,8,9}); //idx
@@ -176,7 +142,7 @@ int main() {
     model.train(x1, y1, {
         .epoch = static_cast<std::size_t>(epochs),
         .batch_size = static_cast<std::size_t>(B),
-        .shuffle = false,
+        .shuffle = true,
         .restore_best_state = true,
         .test = std::vector<at::Tensor>{validation_images, validation_labels},
         .graph_mode = Nott::GraphMode::Capture,
@@ -201,11 +167,9 @@ int main() {
         Nott::Metric::Classification::Informedness,
     }, {.batch_size = 64});
 
-    Nott::Plot::Render(model, Nott::Plot::Reliability::GradCAM({.samples = 4, .random = false, .normalize = true, .overlay = true}),
-        validation_images,validation_labels);
+    Nott::Plot::Render(model, Nott::Plot::Reliability::GradCAM({.samples = 4, .random = false, .normalize = true, .overlay = true}), validation_images,validation_labels);
 
-    //Nott::Plot::Render(model, Nott::Plot::Reliability::LIME({.random = true, .normalize = true, .showWeights = true}),
-    //    validation_images, validation_labels);
+    //Nott::Plot::Render(model, Nott::Plot::Reliability::LIME({.random = true, .normalize = true, .showWeights = true}), validation_images, validation_labels);
 
     return 0;
 }
