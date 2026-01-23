@@ -22,10 +22,6 @@
 #include <limits>
 #include <system_error>
 #include <iostream>
-#include <atomic>
-#include <condition_variable>
-#include <mutex>
-#include <queue>
 
 #include <torch/torch.h>
 
@@ -1985,69 +1981,6 @@ namespace Nott::Data::Load {
 
         return {train_inputs, train_targets, test_inputs, test_targets};
     }
-
-    class DaliLoader {
-    public:
-        using Batch = std::pair<torch::Tensor, torch::Tensor>;
-
-        DaliLoader() = default;
-
-        void enqueue_batch(Batch batch)
-        {
-            {
-                std::lock_guard<std::mutex> lock(mutex_);
-                if (finished_.load()) {
-                    return;
-                }
-                batch_queue_.push(std::move(batch));
-            }
-            batch_available_.notify_one();
-        }
-
-        void mark_end_of_epoch()
-        {
-            finished_.store(true);
-            batch_available_.notify_all();
-        }
-
-        [[nodiscard]] Batch next_batch()
-        {
-            std::unique_lock<std::mutex> lock(mutex_);
-            batch_available_.wait(lock, [&] {
-                return !batch_queue_.empty() || finished_.load();
-            });
-
-            if (batch_queue_.empty()) {
-                return {};
-            }
-
-            auto batch = std::move(batch_queue_.front());
-            batch_queue_.pop();
-            return batch;
-        }
-
-        [[nodiscard]] bool has_next() const
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
-            if (batch_queue_.empty()) {
-                return !finished_.load();
-            }
-            return true;
-        }
-
-        void shutdown()
-        {
-            finished_.store(true);
-            batch_available_.notify_all();
-        }
-
-    private:
-        mutable std::mutex mutex_{};
-        std::condition_variable batch_available_{};
-        std::queue<Batch> batch_queue_{};
-        std::atomic<bool> finished_{false};
-    };
-
 
 }
 
