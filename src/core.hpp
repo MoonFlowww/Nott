@@ -49,6 +49,8 @@
 #include <limits>
 #include <cctype>
 #include <iterator>
+#include <mutex>
+#include <condition_variable>
 
 
 #include <torch/torch.h>
@@ -70,6 +72,7 @@
 
 #include "common/graph.hpp"
 #include "common/save_load.hpp"
+#include "data/loader/loader.hpp"
 #include "utils/terminal.hpp"
 #include "activation/activation.hpp"
 #include "activation/apply.hpp"
@@ -2573,6 +2576,92 @@ namespace Nott {
             train(std::move(packed.inputs), std::move(packed.targets), options);
         }
 
+        void train(Data::Loader::BaseLoader &loader, TrainOptions options = {}) {
+            if (!has_optimizer())
+                throw std::logic_error("Cannot train without an optimizer.");
+            if (!has_loss())
+                throw std::logic_error("Cannot train without a loss function.");
+            if (loader.batch_size() == 0)
+                throw std::invalid_argument("Loader batch size must be greater than zero.");
+            if (options.fold)
+                throw std::invalid_argument("Folded training is not supported with custom data loaders.");
+
+            clear_training_telemetry();
+            if (options.epoch == 0) {
+                return;
+            }
+
+            if (options.buffer_vram > 0 && !device_.is_cuda()) {
+                throw std::runtime_error("VRAM buffering requires the model to be on a CUDA device.");
+            }
+
+            torch::nn::Module::train();
+            this->to(device_);
+
+            TrainOptions effective_options = options;
+            if (effective_options.stream == nullptr) {
+                effective_options.monitor = false;
+            }
+            effective_options.batch_size = loader.batch_size();
+#ifdef TORCH_CUDA_AVAILABLE
+            amp_training_active_ = effective_options.enable_amp && device_.is_cuda();
+            if (amp_training_active_) {
+                ensure_amp_scaler();
+            } else {
+                amp_scaler_.reset();
+            }
+#else
+            (void) effective_options.enable_amp;
+            amp_training_active_ = false;
+#endif
+            zero_grad();
+
+            set_tensor_memory_format(effective_options.memory_format);
+
+            std::optional<typename TrainingDetails::TensorDataset> test_dataset{};
+
+            auto build_evaluation_dataset = [&](const std::vector<torch::Tensor> &dataset,
+                                                std::string_view name) -> typename TrainingDetails::TensorDataset {
+                if (dataset.size() != 2) {
+                    throw std::invalid_argument(std::string(name) +
+                                                " must contain exactly 2 tensors: [inputs, targets].");
+                }
+                const auto &inputs = dataset[0];
+                const auto &targets = dataset[1];
+
+                if (!inputs.defined() || !targets.defined()) {
+                    throw std::invalid_argument(std::string(name) + " tensors must be defined when provided.");
+                }
+                if (inputs.size(0) != targets.size(0)) {
+                    throw std::invalid_argument("Mismatched number of " + std::string(name) +
+                                                " samples between inputs and targets.");
+                }
+                return TrainingDetails::prepare_tensor_dataset(inputs, targets, effective_options.memory_format);
+            };
+
+            if (options.test) {
+                test_dataset = build_evaluation_dataset(*options.test, "test");
+            }
+
+            auto training_step_binding = TrainingDetails::TrainingStepBinding{};
+
+            if (test_dataset) {
+                *test_dataset = TrainingDetails::ensure_contiguous(std::move(*test_dataset),
+                                                                   effective_options.memory_format);
+                *test_dataset = TrainingDetails::ensure_cpu(std::move(*test_dataset), effective_options.memory_format);
+            }
+
+            if (effective_options.buffer_vram > 0) {
+                TrainingDetails::run_epochs<true>(*this, loader, test_dataset, effective_options,
+                                                  training_step_binding);
+            } else {
+                TrainingDetails::run_epochs<false>(*this, loader, test_dataset, effective_options,
+                                                   training_step_binding);
+            }
+
+            loader.shutdown();
+        }
+
         void train(torch::Tensor train_inputs, torch::Tensor train_targets, TrainOptions options = {}) {
             if (!has_optimizer())
                 throw std::logic_error("Cannot train without an optimizer.");
@@ -2705,21 +2794,26 @@ namespace Nott {
                                             const std::optional<typename TrainingDetails::TensorDataset> &
                                             evaluation_dataset) {
                 auto training_dataset = std::move(dataset);
+                auto training_loader = TrainingDetails::TensorDatasetLoader(
+                    std::move(training_dataset),
+                    effective_options.batch_size,
+                    effective_options.shuffle,
+                    /*drop_last=*/false);
                 if (effective_options.shuffle) {
                     if (use_buffer) {
-                        TrainingDetails::run_epochs<true, true>(*this, training_dataset, evaluation_dataset,
-                                                                effective_options, training_step_binding);
+                        TrainingDetails::run_epochs<true>(*this, training_loader, evaluation_dataset,
+                                                          effective_options, training_step_binding);
                     } else {
-                        TrainingDetails::run_epochs<false, true>(*this, training_dataset, evaluation_dataset,
-                                                                 effective_options, training_step_binding);
+                        TrainingDetails::run_epochs<false>(*this, training_loader, evaluation_dataset,
+                                                           effective_options, training_step_binding);
                     }
                 } else {
                     if (use_buffer) {
-                        TrainingDetails::run_epochs<true, false>(*this, training_dataset, evaluation_dataset,
-                                                                 effective_options, training_step_binding);
+                        TrainingDetails::run_epochs<true>(*this, training_loader, evaluation_dataset,
+                                                          effective_options, training_step_binding);
                     } else {
-                        TrainingDetails::run_epochs<false, false>(*this, training_dataset, evaluation_dataset,
-                                                                  effective_options, training_step_binding);
+                        TrainingDetails::run_epochs<false>(*this, training_loader, evaluation_dataset,
+                                                           effective_options, training_step_binding);
                     }
                 }
             };
@@ -4081,13 +4175,97 @@ namespace Nott {
                 return TensorDataset{torch::stack(std::move(inputs)), torch::stack(std::move(targets))};
             }
 
-            template<bool BufferVRAM, bool ShouldShuffle>
-            static void run_epochs(Model &model, TensorDataset &train_dataset,
+            class TensorDatasetLoader final : public Data::Loader::BaseLoader {
+            public:
+                TensorDatasetLoader(TensorDataset dataset,
+                                    std::size_t batch_size,
+                                    bool shuffle,
+                                    bool drop_last)
+                    : dataset_(std::move(dataset)),
+                      batch_size_(batch_size),
+                      shuffle_(shuffle),
+                      drop_last_(drop_last) {
+                    if (dataset_.inputs.defined()) {
+                        total_samples_ = dataset_.inputs.size(0);
+                    }
+                }
+
+                void start_epoch(std::size_t epoch) override {
+                    (void) epoch;
+                    current_offset_ = 0;
+                    if (!shuffle_ || total_samples_ <= 1) {
+                        epoch_indices_ = {};
+                        return;
+                    }
+                    auto index_options = torch::TensorOptions().dtype(torch::kLong);
+                    epoch_indices_ = torch::randperm(total_samples_, index_options);
+                    if (!epoch_indices_.device().is_cpu()) {
+                        epoch_indices_ = epoch_indices_.to(torch::kCPU);
+                    }
+                }
+
+                bool has_next() override {
+                    if (total_samples_ <= 0) {
+                        return false;
+                    }
+                    if (drop_last_) {
+                        return current_offset_ + static_cast<std::int64_t>(batch_size_) <= total_samples_;
+                    }
+                    return current_offset_ < total_samples_;
+                }
+
+                Data::Loader::Batch next_batch() override {
+                    if (!has_next()) {
+                        return {};
+                    }
+                    const auto remaining = total_samples_ - current_offset_;
+                    const auto current_batch = std::min<std::int64_t>(
+                        static_cast<std::int64_t>(batch_size_), remaining);
+                    if (current_batch <= 0) {
+                        return {};
+                    }
+
+                    torch::Tensor batch_inputs;
+                    torch::Tensor batch_targets;
+
+                    if (shuffle_ && epoch_indices_.defined()) {
+                        auto batch_indices = epoch_indices_.narrow(0, current_offset_, current_batch);
+                        if (!batch_indices.device().is_cpu()) {
+                            batch_indices = batch_indices.to(torch::kCPU);
+                        }
+                        batch_inputs = dataset_.inputs.index_select(0, batch_indices);
+                        batch_targets = dataset_.targets.index_select(0, batch_indices);
+                    } else {
+                        batch_inputs = dataset_.inputs.narrow(0, current_offset_, current_batch);
+                        batch_targets = dataset_.targets.narrow(0, current_offset_, current_batch);
+                    }
+
+                    current_offset_ += current_batch;
+                    return {std::move(batch_inputs), std::move(batch_targets)};
+                }
+
+                [[nodiscard]] std::size_t batch_size() const override { return batch_size_; }
+                [[nodiscard]] bool drop_last() const override { return drop_last_; }
+
+                void shutdown() override {
+                }
+
+            private:
+                TensorDataset dataset_{};
+                std::size_t batch_size_{0};
+                bool shuffle_{false};
+                bool drop_last_{false};
+                std::int64_t total_samples_{0};
+                std::int64_t current_offset_{0};
+                torch::Tensor epoch_indices{};
+            };
+
+            template<bool BufferVRAM>
+            static void run_epochs(Model &model, Data::Loader::BaseLoader &train_loader,
                                    const std::optional<TensorDataset> &test_dataset, const TrainOptions &options,
                                    const TrainingStepBinding &training_step) {
                 const auto device = model.device();
-                const auto total_samples = train_dataset.inputs.size(0);
-                const auto batch_size = static_cast<std::int64_t>(options.batch_size);
+                const auto batch_size = static_cast<std::int64_t>(train_loader.batch_size());
                 const auto requested_graph_mode = options.graph_mode;
                 const bool graph_mode_active = model.graph_execution_enabled(
                     requested_graph_mode, GraphExecutionPhase::Training);
@@ -4104,16 +4282,6 @@ namespace Nott {
                 if (graph_mode_enabled) {
                     model.ensure_optimizer_graph_capability(graph_mode);
                 }
-
-                torch::TensorOptions index_options = torch::TensorOptions().dtype(torch::kLong);
-
-                if (train_dataset.inputs.device().is_cpu() && !train_dataset.inputs.is_pinned()) {
-                    train_dataset.inputs = train_dataset.inputs.pin_memory();
-                }
-                if (train_dataset.targets.device().is_cpu() && !train_dataset.targets.is_pinned()) {
-                    train_dataset.targets = train_dataset.targets.pin_memory();
-                }
-
 
                 auto best_test = std::optional<double>{};
                 std::vector<torch::Tensor> best_parameters;
@@ -4286,120 +4454,49 @@ namespace Nott {
                     return true;
                 };
 
+                auto process_with_prefetch = [&](auto &&provider, auto &&process_batch, std::int64_t &weight) {
+                    if (!prefetch_state) {
+                        return;
+                    }
+
+                    std::size_t current_slot = 0;
+                    bool has_batch = schedule_prefetch_from_provider(provider, current_slot);
+                    while (has_batch) {
+                        wait_for_prefetch_slot(current_slot);
+                        const auto processed = process_batch(prefetch_state->inputs[current_slot],
+                                                             prefetch_state->targets[current_slot]);
+                        weight += processed;
+
+                        const std::size_t next_slot = current_slot ^ 1U;
+                        has_batch = schedule_prefetch_from_provider(provider, next_slot);
+                        current_slot = next_slot;
+                    }
+                };
 #endif
 
+                auto resolve_batch_signature = [&](std::int64_t current_batch,
+                                                   const torch::Tensor &inputs,
+                                                   const torch::Tensor &targets) -> const BatchSignature & {
+                    auto iterator = batch_signature_cache.find(current_batch);
+                    if (iterator == batch_signature_cache.end()) {
+                        iterator = batch_signature_cache.emplace(
+                            current_batch, BatchSignature::from_tensors(inputs, targets)).first;
+                        return iterator->second;
+                    }
+                    if (!iterator->second.matches(inputs, targets)) {
+                        iterator->second = BatchSignature::from_tensors(inputs, targets);
+                    }
+
+                    return iterator->second;
+                };
 
                 for (std::size_t epoch = 0; epoch < options.epoch; ++epoch) {
                     const auto epoch_start = std::chrono::steady_clock::now();
-
-                    torch::Tensor epoch_indices;
-                    if constexpr (ShouldShuffle) {
-                        if (total_samples > 1) {
-                            epoch_indices = torch::randperm(total_samples, index_options);
-                        } else {
-                            epoch_indices = torch::arange(total_samples, index_options);
-                        }
-                    }
+                    train_loader.start_epoch(epoch);
 
                     auto accumulation = torch::zeros({}, torch::TensorOptions().dtype(torch::kFloat64).device(device));
                     std::int64_t weight = 0;
                     std::size_t processed_steps = 0;
-
-#ifdef TORCH_CUDA_AVAILABLE
-                    auto process_with_prefetch = [&](auto &&provider, std::size_t max_batches) {
-                        if (!prefetch_state) {
-                            return;
-                        }
-
-                        std::size_t current_slot = 0;
-                        bool has_batch = schedule_prefetch_from_provider(provider, current_slot);
-                        for (std::size_t batch_index = 0; batch_index < max_batches && has_batch; ++batch_index) {
-                            wait_for_prefetch_slot(current_slot);
-                            const auto processed = process_batch(prefetch_state->inputs[current_slot],
-                                                                 prefetch_state->targets[current_slot]);
-                            weight += processed;
-
-                            const std::size_t next_slot = current_slot ^ 1U;
-                            has_batch = schedule_prefetch_from_provider(provider, next_slot);
-                            current_slot = next_slot;
-                        }
-                    };
-#endif
-
-
-                    const std::size_t total_batches = total_samples > 0
-                                                          ? static_cast<std::size_t>(
-                                                              (total_samples + batch_size - 1) / batch_size)
-                                                          : 0;
-
-                    auto fetch_batch = [&](std::size_t batch_index) {
-                        NvtxRange data_range("Nott::Model::train::data_preparation");
-                        const auto offset = static_cast<std::int64_t>(batch_index) * batch_size;
-                        const auto remaining = total_samples - offset;
-                        const auto current_batch = std::min<std::int64_t>(batch_size, remaining);
-                        if (current_batch <= 0)
-                            return std::pair<torch::Tensor, torch::Tensor>{torch::Tensor{}, torch::Tensor{}};
-
-                        if (graph_mode_enabled && current_batch != batch_size) {
-                            throw std::invalid_argument(
-                                "Graph optimisation requires every batch to match the captured batch size ("
-                                + std::to_string(batch_size)
-                                + "). Received " + std::to_string(current_batch)
-                                + " samples; pad or drop the remainder before enabling graph replay.");
-                        }
-
-
-                        torch::Tensor batch_inputs;
-                        torch::Tensor batch_targets;
-
-                        if constexpr (ShouldShuffle) {
-                            auto batch_indices = epoch_indices.narrow(0, offset, current_batch);
-                            if (!batch_indices.device().is_cpu()) {
-                                batch_indices = batch_indices.to(torch::kCPU);
-                            }
-                            batch_inputs = train_dataset.inputs.index_select(0, batch_indices);
-                            batch_targets = train_dataset.targets.index_select(0, batch_indices);
-                            batch_inputs = ensure_layout(std::move(batch_inputs), channels_last_inputs);
-                            batch_targets = ensure_layout(std::move(batch_targets), false);
-                            if (batch_inputs.device().is_cpu() && !batch_inputs.is_pinned()) {
-                                batch_inputs = batch_inputs.pin_memory();
-                            }
-                            if (batch_targets.device().is_cpu() && !batch_targets.is_pinned()) {
-                                batch_targets = batch_targets.pin_memory();
-                            }
-                        } else {
-                            batch_inputs = train_dataset.inputs.narrow(0, offset, current_batch);
-                            batch_targets = train_dataset.targets.narrow(0, offset, current_batch);
-                            batch_inputs = ensure_layout(std::move(batch_inputs), channels_last_inputs);
-                            batch_targets = ensure_layout(std::move(batch_targets), false);
-                            if (batch_inputs.device().is_cpu() && !batch_inputs.is_pinned()) {
-                                batch_inputs = batch_inputs.pin_memory();
-                            }
-                            if (batch_targets.device().is_cpu() && !batch_targets.is_pinned()) {
-                                batch_targets = batch_targets.pin_memory();
-                            }
-                        }
-
-                        return std::pair<torch::Tensor, torch::Tensor>{
-                            std::move(batch_inputs), std::move(batch_targets)
-                        };
-                    };
-
-                    auto resolve_batch_signature = [&](std::int64_t batch_size,
-                                                       const torch::Tensor &inputs,
-                                                       const torch::Tensor &targets) -> const BatchSignature & {
-                        auto iterator = batch_signature_cache.find(batch_size);
-                        if (iterator == batch_signature_cache.end()) {
-                            iterator = batch_signature_cache.emplace(
-                                batch_size, BatchSignature::from_tensors(inputs, targets)).first;
-                            return iterator->second;
-                        }
-                        if (!iterator->second.matches(inputs, targets)) {
-                            iterator->second = BatchSignature::from_tensors(inputs, targets);
-                        }
-
-                        return iterator->second;
-                    };
 
                     auto process_batch = [&](torch::Tensor batch_inputs, torch::Tensor batch_targets) {
                         if (!batch_inputs.defined() || !batch_targets.defined()) {
@@ -4411,18 +4508,32 @@ namespace Nott {
                             return std::int64_t{0};
                         }
 
+                        if (graph_mode_enabled && current_batch != batch_size) {
+                            throw std::invalid_argument(
+                                "Graph optimisation requires every batch to match the captured batch size ("
+                                + std::to_string(batch_size)
+                                + "). Received " + std::to_string(current_batch)
+                                + " samples; pad or drop the remainder before enabling graph replay.");
+                        }
+
                         torch::Tensor loss;
                         bool replay_retry_attempted = false;
 
-
                         {
                             NvtxRange data_range("Nott::Model::train::data_preparation");
+                            batch_inputs = ensure_layout(std::move(batch_inputs), channels_last_inputs);
+                            batch_targets = ensure_layout(std::move(batch_targets), false);
+                            if (batch_inputs.device().is_cpu() && !batch_inputs.is_pinned()) {
+                                batch_inputs = batch_inputs.pin_memory();
+                            }
+                            if (batch_targets.device().is_cpu() && !batch_targets.is_pinned()) {
+                                batch_targets = batch_targets.pin_memory();
+                            }
                             batch_inputs = stage_to_device(std::move(batch_inputs), device_batch_inputs_buffer,
                                                            channels_last_inputs);
                             batch_targets = stage_to_device(std::move(batch_targets), device_batch_targets_buffer,
                                                             false);
                         }
-
 
                         while (true) {
                             GraphMode batch_graph_mode = graph_mode;
@@ -4434,15 +4545,14 @@ namespace Nott {
                                 batch_signature = &resolved_signature;
 
                                 bool capture_ready = false;
-                                if (batch_signature && active_graph_signature && *active_graph_signature == *
-                                    batch_signature) {
+                                if (batch_signature && active_graph_signature && *active_graph_signature ==
+                                    *batch_signature) {
                                     auto readiness = graph_capture_ready.find(*batch_signature);
                                     capture_ready = (readiness != graph_capture_ready.end()) && readiness->second;
                                 }
 
                                 if (!capture_ready) {
                                     batch_graph_mode = GraphMode::Capture;
-
 
                                     graph_capture_ready[*batch_signature] = false;
 
@@ -4503,13 +4613,11 @@ namespace Nott {
                             NvtxRange idle_range("Nott::Model::train::kernel_idle");
                             model.step_scheduler();
 
-
                             if (regularization_active) {
                                 model.update_regularization_states(step_index, true);
                             }
                             ++step_index;
                             ++processed_steps;
-
 
                             auto loss_tensor = loss.detach();
                             if (loss_tensor.device() != accumulation.device()) {
@@ -4526,21 +4634,18 @@ namespace Nott {
                         if (graph_mode_enabled) {
 #ifdef TORCH_CUDA_AVAILABLE
                             if (prefetch_state) {
-                                std::size_t next_batch_index = 0;
                                 auto provider = [&]() -> std::pair<torch::Tensor, torch::Tensor> {
-                                    if (next_batch_index >= total_batches) {
+                                    if (!train_loader.has_next()) {
                                         return {};
                                     }
-                                    auto batch = fetch_batch(next_batch_index);
-                                    ++next_batch_index;
-                                    return batch;
+                                    return train_loader.next_batch();
                                 };
-                                process_with_prefetch(provider, total_batches);
+                                process_with_prefetch(provider, process_batch, weight);
                             } else
 #endif
                             {
-                                for (std::size_t batch_index = 0; batch_index < total_batches; ++batch_index) {
-                                    auto batch_pair = fetch_batch(batch_index);
+                                while (train_loader.has_next()) {
+                                    auto batch_pair = train_loader.next_batch();
                                     const auto processed = process_batch(
                                         std::move(batch_pair.first), std::move(batch_pair.second));
                                     weight += processed;
@@ -4548,40 +4653,34 @@ namespace Nott {
                             }
                         } else {
                             std::deque<std::pair<torch::Tensor, torch::Tensor> > buffered_batches;
-                            std::size_t next_batch_to_load = 0;
-                            const std::size_t max_batches = total_batches == 0 ? 1 : total_batches;
                             const std::size_t buffer_limit = std::max<std::size_t>(1,
-                                std::min<std::size_t>(options.buffer_vram + 1, max_batches));
+                                options.buffer_vram + 1);
 
-                            auto maintain_buffer = [&](std::size_t current_index) {
-                                const std::size_t desired_size = std::min(buffer_limit, total_batches - current_index);
-                                while (buffered_batches.size() < desired_size && next_batch_to_load < total_batches) {
-                                    auto batch = fetch_batch(next_batch_to_load);
+                            auto maintain_buffer = [&]() {
+                                while (buffered_batches.size() < buffer_limit && train_loader.has_next()) {
+                                    auto batch = train_loader.next_batch();
                                     buffered_batches.push_back(std::move(batch));
-                                    ++next_batch_to_load;
                                 }
                             };
 
 #ifdef TORCH_CUDA_AVAILABLE
                             if (prefetch_state) {
-                                std::size_t processed_batches = 0;
                                 auto provider = [&]() -> std::pair<torch::Tensor, torch::Tensor> {
-                                    maintain_buffer(processed_batches);
+                                    maintain_buffer();
                                     if (buffered_batches.empty()) {
                                         return {};
                                     }
                                     auto batch_pair = std::move(buffered_batches.front());
                                     buffered_batches.pop_front();
-                                    ++processed_batches;
-                                    maintain_buffer(processed_batches);
+                                    maintain_buffer();
                                     return batch_pair;
                                 };
-                                process_with_prefetch(provider, total_batches);
+                                process_with_prefetch(provider, process_batch, weight);
                             } else
 #endif
                             {
-                                for (std::size_t batch_index = 0; batch_index < total_batches; ++batch_index) {
-                                    maintain_buffer(batch_index);
+                                while (true) {
+                                    maintain_buffer();
                                     if (buffered_batches.empty()) {
                                         break;
                                     }
@@ -4593,29 +4692,25 @@ namespace Nott {
                                         std::move(batch_pair.first), std::move(batch_pair.second));
                                     weight += processed;
 
-
-                                    maintain_buffer(batch_index + 1);
+                                    maintain_buffer();
                                 }
                             }
                         }
                     } else {
 #ifdef TORCH_CUDA_AVAILABLE
                         if (prefetch_state) {
-                            std::size_t next_batch_index = 0;
                             auto provider = [&]() -> std::pair<torch::Tensor, torch::Tensor> {
-                                if (next_batch_index >= total_batches) {
+                                if (!train_loader.has_next()) {
                                     return {};
                                 }
-                                auto batch = fetch_batch(next_batch_index);
-                                ++next_batch_index;
-                                return batch;
+                                return train_loader.next_batch();
                             };
-                            process_with_prefetch(provider, total_batches);
+                            process_with_prefetch(provider, process_batch, weight);
                         } else
 #endif
                         {
-                            for (std::size_t batch_index = 0; batch_index < total_batches; ++batch_index) {
-                                auto batch_pair = fetch_batch(batch_index);
+                            while (train_loader.has_next()) {
+                                auto batch_pair = train_loader.next_batch();
                                 const auto processed = process_batch(std::move(batch_pair.first),
                                                                      std::move(batch_pair.second));
                                 weight += processed;
@@ -4754,7 +4849,6 @@ namespace Nott {
                     }
                 }
             }
-
 
             template<bool BufferVRAM>
             static std::optional<TrainingTelemetry::DeferredScalar> compute_dataset_loss(
