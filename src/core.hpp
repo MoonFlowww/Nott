@@ -4898,12 +4898,8 @@ template<typename EnsureLayout>
                         || buffer.device() != device
                         || buffer.scalar_type() != tensor.scalar_type()
                         || !buffer.sizes().equals(tensor.sizes())
-                        || (requires_channels_last
-                                ? !buffer.is_contiguous(torch::MemoryFormat::ChannelsLast)
-                                : !buffer.is_contiguous())) {
-                        const auto memory_format = requires_channels_last
-                                                       ? torch::MemoryFormat::ChannelsLast
-                                                       : torch::MemoryFormat::Contiguous;
+                        || (requires_channels_last ? !buffer.is_contiguous(torch::MemoryFormat::ChannelsLast) : !buffer.is_contiguous())) {
+                        const auto memory_format = requires_channels_last ? torch::MemoryFormat::ChannelsLast : torch::MemoryFormat::Contiguous;
                         buffer = torch::empty(tensor.sizes(), options, memory_format);
                     }
 
