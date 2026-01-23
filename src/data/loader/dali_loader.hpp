@@ -73,22 +73,24 @@ namespace Nott::Data::Loader {
             std::size_t seed{0};
 
             std::atomic<bool> stop_requested{false};
-            bool closed{false};
+            std::atomic<bool> finished{false};
             std::mutex mutex{};
             std::condition_variable has_data{};
             std::condition_variable has_space{};
             std::deque<Batch> ready{};
             std::thread producer{};
 
+            void signal_finished()
+            {
+                finished.store(true);
+                has_data.notify_all();
+                has_space.notify_all();
+            }
+
             void request_stop()
             {
                 stop_requested.store(true);
-                {
-                    std::lock_guard<std::mutex> lock(mutex);
-                    closed = true;
-                }
-                has_data.notify_all();
-                has_space.notify_all();
+                signal_finished();
             }
 
             void join()
@@ -131,7 +133,7 @@ namespace Nott::Data::Loader {
             {
                 std::unique_lock<std::mutex> lock(mutex);
                 has_data.wait(lock, [&] {
-                    return stop_requested.load() || closed || !ready.empty();
+                    return stop_requested.load() || finished.load() || !ready.empty();
                 });
                 if (ready.empty()) {
                     return {};
@@ -145,7 +147,7 @@ namespace Nott::Data::Loader {
             bool has_next() const
             {
                 std::lock_guard<std::mutex> lock(mutex);
-                return !ready.empty() || !closed;
+                return !ready.empty() || !finished.load();
             }
 
             void reset_epoch(std::size_t epoch)
@@ -234,6 +236,7 @@ namespace Nott::Data::Loader {
                             return;
                         }
                     }
+                    signal_finished();
                 } catch (...) {
                     request_stop();
                 }
@@ -282,7 +285,7 @@ namespace Nott::Data::Loader {
 #if NOTT_HAS_DALI
         shutdown();
         impl_->stop_requested.store(false);
-        impl_->closed = false;
+        impl_->finished.store(false);
         impl_->clear_queue();
         impl_->reset_epoch(epoch);
         impl_->producer = std::thread([impl = impl_.get()] { impl->run(); });
