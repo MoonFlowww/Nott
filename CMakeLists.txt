@@ -94,7 +94,8 @@ add_library(Nott SHARED
         src/loss/details/reduction.hpp
         src/layer/registry.hpp
         src/optimizer/registry.hpp
-        test/analysis/overhead.cpp)
+        test/analysis/overhead.cpp
+        src/data/loader/loader.hpp)
 
 
 target_link_libraries(Nott "${TORCH_LIBRARIES}" Boost::filesystem ${OpenCV_LIBS})

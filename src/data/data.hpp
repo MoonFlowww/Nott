@@ -1,6 +1,7 @@
 #ifndef Nott_DATA_HPP
 #define Nott_DATA_HPP
 // This file is an factory, must exempt it from any logical-code. For functions look into "/details"
+#include "loader/loader.hpp"
 #include "details/generation.hpp"
 #include "load/load.hpp"
 #include "transform/manipulation.hpp"
