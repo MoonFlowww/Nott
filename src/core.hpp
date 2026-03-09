@@ -4301,7 +4301,7 @@ namespace Nott {
                         }
                     }
 
-                    auto accumulation = torch::zeros({}, torch::TensorOptions().dtype(torch::kFloat64).device(device));
+                    double accumulation_val = 0.0;
                     std::int64_t weight = 0;
                     std::size_t processed_steps = 0;
 
@@ -4511,13 +4511,9 @@ namespace Nott {
                             ++processed_steps;
 
 
-                            auto loss_tensor = loss.detach();
-                            if (loss_tensor.device() != accumulation.device()) {
-                                loss_tensor = loss_tensor.to(accumulation.device());
-                            }
-                            loss_tensor = loss_tensor.to(torch::kFloat64);
-                            loss_tensor.mul_(static_cast<double>(current_batch));
-                            accumulation.add_(loss_tensor);
+                            const auto loss_value = loss.detach().item<double>();
+                            accumulation_val += loss_value * static_cast<double>(current_batch);
+
                         }
                         return current_batch;
                     };
@@ -4624,17 +4620,10 @@ namespace Nott {
                     }
 
                     TrainingTelemetry::DeferredScalar train_loss_scalar;
+                    auto train_loss_tensor = torch::zeros({}, torch::TensorOptions().dtype(torch::kFloat64));
                     if (weight > 0) {
-                        auto averaged_loss_tensor = accumulation / static_cast<double>(weight);
-                        train_loss_scalar = TrainingTelemetry::DeferredScalar::from_tensor(
-                            std::move(averaged_loss_tensor), device);
-                    } else {
-                        auto zero_tensor = accumulation.detach();
-                        zero_tensor.zero_();
-                        train_loss_scalar = TrainingTelemetry::DeferredScalar::from_tensor(
-                            std::move(zero_tensor), device);
-                    }
-
+                        train_loss_tensor = torch::tensor(accumulation_val / static_cast<double>(weight), torch::TensorOptions().dtype(torch::kFloat64));
+                    } train_loss_scalar = TrainingTelemetry::DeferredScalar::from_tensor(std::move(train_loss_tensor), device);
                     last_train_loss_scalar = train_loss_scalar;
 
                     std::optional<TrainingTelemetry::DeferredScalar> test_loss_scalar{};
