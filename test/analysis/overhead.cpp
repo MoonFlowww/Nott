@@ -4,7 +4,6 @@ int main() {
     Nott::Model model("OverheadDetect");
     model.use_cuda(torch::cuda::is_available());
 
-
     model.add(Nott::Block::Sequential({
         Nott::Layer::Conv2d({1, 16, {3, 3}, {1, 1}, {1, 1}, {1, 1}, 1, false}, Nott::Activation::SiLU, Nott::Initialization::HeNormal),
         Nott::Layer::MaxPool2d({{2, 2}, {2, 2}})
@@ -15,7 +14,7 @@ int main() {
         Nott::Layer::MaxPool2d({{2, 2}, {2, 2}})
     }));
 
-    model.add(Nott::Layer::AdaptiveAvgPool2d({{1, 1}})); // Result: 32x1x1
+    model.add(Nott::Layer::AdaptiveAvgPool2d({{1, 1}}));
     model.add(Nott::Layer::Flatten());
 
     model.add(Nott::Layer::HardDropout({.probability = 0.2}));

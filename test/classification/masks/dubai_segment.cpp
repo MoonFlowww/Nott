@@ -1113,24 +1113,24 @@ int _main() {
                            std::to_string(tile);
         // cuts(3*3) -> Tile -> cuts(X*Y)
         auto [x1, y1, x2, y2] =
-                Nott::Data::Load::Universal(path,
-                                            Nott::Data::Type::JPG{
-                                                "images",
-                                                {
-                                                    .grayscale = false, .normalize_colors = false,
-                                                    .normalize_size = true, .color_order = "RGB"
-                                                }
-                                            },
-                                            Nott::Data::Type::PNG{
-                                                "masks",
-                                                {
-                                                    .normalize_colors = false, .normalize_size = true,
-                                                    .InterpolationMode =
-                                                    Nott::Data::Transform::Format::Options::InterpMode::Nearest,
-                                                    .color_order = "RGB"
-                                                }
-                                            },
-                                            {.train_fraction = 1.f, .test_fraction = 0.f, .shuffle = false});
+            Nott::Data::Load::Universal(path,
+                Nott::Data::Type::JPG{
+                    "images",
+                    {
+                        .grayscale = false, .normalize_colors = false,
+                        .normalize_size = true, .color_order = "RGB"
+                    }
+                },
+                Nott::Data::Type::PNG{
+                    "masks",
+                    {
+                        .normalize_colors = false, .normalize_size = true,
+                        .InterpolationMode =
+                        Nott::Data::Transform::Format::Options::InterpMode::Nearest,
+                        .color_order = "RGB"
+                    }
+                },
+                {.train_fraction = 1.f, .test_fraction = 0.f, .shuffle = false});
 
         x1 = OriginalTile(x1);
         Nott::Data::Check::Size(x1, ("X" + std::to_string(tile) + " Reconstructed Tile"));
@@ -1147,16 +1147,8 @@ int _main() {
 
         Nott::Data::Check::Size(x1, ("X" + std::to_string(tile) + " After cuts"));
         Nott::Data::Check::Size(y1, ("Y" + std::to_string(tile) + " After cuts"));
-        x1 = Nott::Data::Transform::Format::Downsample(x1, {
-                                                           .size = {128, 128},
-                                                           .interp =
-                                                           Nott::Data::Transform::Format::Options::InterpMode::Bilinear
-                                                       });
-        y1 = Nott::Data::Transform::Format::Downsample(y1, {
-                                                           .size = {128, 128},
-                                                           .interp =
-                                                           Nott::Data::Transform::Format::Options::InterpMode::Nearest
-                                                       });
+        x1 = Nott::Data::Transform::Format::Downsample(x1, {.size = {128, 128}, .interp = Nott::Data::Transform::Format::Options::InterpMode::Bilinear});
+        y1 = Nott::Data::Transform::Format::Downsample(y1, { .size = {128, 128}, .interp = Nott::Data::Transform::Format::Options::InterpMode::Nearest});
 
         xs.push_back(x1);
         ys.push_back(y1);
@@ -1169,12 +1161,10 @@ int _main() {
     Nott::Data::Check::Size(Y, "Y Total");
 
 
-    model.add(Nott::Layer::Conv2d({3, 32, {1, 3}, {1, 1}, {0, 1}},
-                                  Nott::Activation::ReLU, Nott::Initialization::HeUniform), "conv1");
+    model.add(Nott::Layer::Conv2d({3, 32, {1, 3}, {1, 1}, {0, 1}}, Nott::Activation::ReLU, Nott::Initialization::HeUniform), "conv1");
 
     model.add(Nott::Layer::BatchNorm2d({.num_features = 32}), "bn1");
-    model.add(Nott::Layer::Conv2d({32, 64, {1, 3}, {1, 1}, {0, 1}},
-                                  Nott::Activation::ReLU, Nott::Initialization::HeUniform), "conv2");
+    model.add(Nott::Layer::Conv2d({32, 64, {1, 3}, {1, 1}, {0, 1}}, Nott::Activation::ReLU, Nott::Initialization::HeUniform), "conv2");
 
     model.add(Nott::Layer::BatchNorm2d({.num_features = 64}), "bn2");
     model.add(Nott::Layer::AdaptiveAvgPool2d({.output_size = {1, 1}}), "gap");
@@ -1182,15 +1172,15 @@ int _main() {
     model.add(Nott::Layer::FC({64, 6}, Nott::Activation::Identity, Nott::Initialization::XavierUniform), "classifier");
 
     model.links({
-                    Nott::LinkSpec{Nott::Port::Input("@input"), Nott::Port::Module("conv1")},
-                    Nott::LinkSpec{Nott::Port::Module("conv1"), Nott::Port::Module("bn1")},
-                    Nott::LinkSpec{Nott::Port::Module("bn1"), Nott::Port::Module("conv2")},
-                    Nott::LinkSpec{Nott::Port::Module("conv2"), Nott::Port::Module("bn2")},
-                    Nott::LinkSpec{Nott::Port::Module("bn2"), Nott::Port::Module("gap")},
-                    Nott::LinkSpec{Nott::Port::Module("gap"), Nott::Port::Module("flatten")},
-                    Nott::LinkSpec{Nott::Port::Module("flatten"), Nott::Port::Module("classifier")},
-                    Nott::LinkSpec{Nott::Port::Module("classifier"), Nott::Port::Output("@output")},
-                }, true);
+        Nott::LinkSpec{Nott::Port::Input("@input"), Nott::Port::Module("conv1")},
+        Nott::LinkSpec{Nott::Port::Module("conv1"), Nott::Port::Module("bn1")},
+        Nott::LinkSpec{Nott::Port::Module("bn1"), Nott::Port::Module("conv2")},
+        Nott::LinkSpec{Nott::Port::Module("conv2"), Nott::Port::Module("bn2")},
+        Nott::LinkSpec{Nott::Port::Module("bn2"), Nott::Port::Module("gap")},
+        Nott::LinkSpec{Nott::Port::Module("gap"), Nott::Port::Module("flatten")},
+        Nott::LinkSpec{Nott::Port::Module("flatten"), Nott::Port::Module("classifier")},
+        Nott::LinkSpec{Nott::Port::Module("classifier"), Nott::Port::Output("@output")},
+    }, true);
 
 
     Y = ConvertRgbMasksToOneHot(Y);
@@ -1245,7 +1235,7 @@ int _main() {
     X = X.view({-1, 3, 1, 5}).contiguous();
     Nott::Data::Check::Size(X, "X Train-ready");
 
-    model.train(X, Y,{
+    model.train(X, Y, {
                     .epoch = E,
                     .batch_size = B,
                     .restore_best_state = true,
