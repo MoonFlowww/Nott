@@ -157,22 +157,6 @@ namespace Nott {
         torch::MemoryFormat memory_format{torch::MemoryFormat::Contiguous};
     };
 
-    struct NvtxRange {
-        explicit NvtxRange(const char *name) {
-#ifdef TORCH_CUDA_AVAILABLE
-            nvtxRangePushA(name);
-#else
-            (void) name;
-#endif
-        }
-
-        ~NvtxRange() {
-#ifdef TORCH_CUDA_AVAILABLE
-            nvtxRangePop();
-#endif
-        }
-    };
-
 
     class Model : public torch::nn::Module {
         using RegularizationState = Regularization::StateVariant;
@@ -4082,15 +4066,12 @@ namespace Nott {
             }
 
             template<bool BufferVRAM, bool ShouldShuffle>
-            static void run_epochs(Model &model, TensorDataset &train_dataset,
-                                   const std::optional<TensorDataset> &test_dataset, const TrainOptions &options,
-                                   const TrainingStepBinding &training_step) {
+            static void run_epochs(Model &model, TensorDataset &train_dataset, const std::optional<TensorDataset> &test_dataset, const TrainOptions &options, const TrainingStepBinding &training_step) {
                 const auto device = model.device();
                 const auto total_samples = train_dataset.inputs.size(0);
                 const auto batch_size = static_cast<std::int64_t>(options.batch_size);
                 const auto requested_graph_mode = options.graph_mode;
-                const bool graph_mode_active = model.graph_execution_enabled(
-                    requested_graph_mode, GraphExecutionPhase::Training);
+                const bool graph_mode_active = model.graph_execution_enabled(requested_graph_mode, GraphExecutionPhase::Training);
                 const auto graph_mode = graph_mode_active ? requested_graph_mode : GraphMode::Disabled;
                 const bool graph_mode_enabled = graph_mode != GraphMode::Disabled;
                 const bool amp_enabled = model.is_amp_training_active();
@@ -4124,9 +4105,9 @@ namespace Nott {
 
                 const bool regularization_active = model.has_regularization();
 
-                std::unordered_map<BatchSignature, bool, BatchSignature::Hash> graph_capture_ready{};
-                std::unordered_map<std::int64_t, BatchSignature> batch_signature_cache{};
-                std::optional<BatchSignature> active_graph_signature{};
+                enum class GraphCaptureStatus : uint8_t { NeverCaptured, Pending, Ready };
+                GraphCaptureStatus graph_capture_status{GraphCaptureStatus::NeverCaptured};
+                BatchSignature active_batch_signature{};
 
                 struct PendingEpochLog {
                     std::size_t epoch_index{};
@@ -4141,9 +4122,8 @@ namespace Nott {
                 std::deque<PendingEpochLog> pending_epoch_logs{};
 
                 auto flush_pending_epoch_logs = [&](bool drain) {
-                    if (!options.monitor || options.stream == nullptr) {
+                    if (!options.monitor || options.stream == nullptr || pending_epoch_logs.empty())
                         return;
-                    }
 
                     while (!pending_epoch_logs.empty()) {
                         auto &front = pending_epoch_logs.front();
@@ -4156,13 +4136,13 @@ namespace Nott {
 
                         const auto train_loss_value = front.train_loss.materialize();
                         log_epoch(*options.stream,
-                                  front.epoch_index,
-                                  front.total_epochs,
-                                  train_loss_value,
-                                  front.test_loss,
-                                  front.delta,
-                                  front.improved,
-                                  front.duration_seconds);
+                            front.epoch_index,
+                            front.total_epochs,
+                            train_loss_value,
+                            front.test_loss,
+                            front.delta,
+                            front.improved,
+                            front.duration_seconds);
                         pending_epoch_logs.pop_front();
                     }
                 };
@@ -4170,6 +4150,8 @@ namespace Nott {
 
                 torch::Tensor device_batch_inputs_buffer;
                 torch::Tensor device_batch_targets_buffer;
+                bool input_buffer_stable = false;
+                bool target_buffer_stable = false;
                 const bool channels_last_inputs = options.memory_format == torch::MemoryFormat::ChannelsLast;
 
                 TrainingTelemetry::DeferredScalar last_train_loss_scalar;
@@ -4208,8 +4190,7 @@ namespace Nott {
                     return tensor;
                 };
 
-                auto stage_to_device = [&](torch::Tensor tensor, torch::Tensor &buffer, bool apply_channels_last,
-                                           bool force_non_blocking = false, bool use_prefetch_stream = false) {
+                auto stage_to_device = [&](torch::Tensor tensor, torch::Tensor &buffer, bool &stable, bool apply_channels_last, bool force_non_blocking = false, bool use_prefetch_stream = false) {
                     tensor = ensure_layout(std::move(tensor), apply_channels_last);
                     if (!tensor.defined() || tensor.device() == device) {
                         return tensor;
@@ -4220,15 +4201,14 @@ namespace Nott {
 
                     const bool requires_channels_last = apply_channels_last && tensor.dim() >= 4;
 
-                    if (!buffer.defined() || buffer.device() != device || buffer.scalar_type() != tensor.scalar_type()
-                        || !buffer.sizes().equals(tensor.sizes())
-                        || (requires_channels_last
-                                ? !buffer.is_contiguous(torch::MemoryFormat::ChannelsLast)
-                                : !buffer.is_contiguous())) {
-                        const auto memory_format = requires_channels_last
-                                                       ? torch::MemoryFormat::ChannelsLast
-                                                       : torch::MemoryFormat::Contiguous;
-                        buffer = torch::empty(tensor.sizes(), options, memory_format);
+                    if (!stable) {
+                        if (!buffer.defined() || buffer.device() != device || buffer.scalar_type() != tensor.scalar_type() || !buffer.sizes().equals(tensor.sizes()) ||
+                            (requires_channels_last ? !buffer.is_contiguous(torch::MemoryFormat::ChannelsLast) : !buffer.is_contiguous())) {
+                            const auto memory_format = requires_channels_last ? torch::MemoryFormat::ChannelsLast : torch::MemoryFormat::Contiguous;
+                            buffer = torch::empty(tensor.sizes(), options, memory_format);
+                        } else {
+                            stable = true;  // Buffer confirmed correct; skip checks for future iters
+                        }
                     }
 
                     (void) use_prefetch_stream;
@@ -4291,15 +4271,14 @@ namespace Nott {
 
                 for (std::size_t epoch = 0; epoch < options.epoch; ++epoch) {
                     const auto epoch_start = std::chrono::steady_clock::now();
-
                     torch::Tensor epoch_indices;
                     if constexpr (ShouldShuffle) {
-                        if (total_samples > 1) {
-                            epoch_indices = torch::randperm(total_samples, index_options);
-                        } else {
-                            epoch_indices = torch::arange(total_samples, index_options);
-                        }
+                        input_buffer_stable  = false;
+                        target_buffer_stable = false;
+                        epoch_indices = (total_samples > 1) ? torch::randperm(total_samples, index_options) : torch::arange(total_samples, index_options);
                     }
+
+
 
                     double accumulation_val = 0.0;
                     std::int64_t weight = 0;
@@ -4333,7 +4312,6 @@ namespace Nott {
                                                           : 0;
 
                     auto fetch_batch = [&](std::size_t batch_index) {
-                        NvtxRange data_range("Nott::Model::train::data_preparation");
                         const auto offset = static_cast<std::int64_t>(batch_index) * batch_size;
                         const auto remaining = total_samples - offset;
                         const auto current_batch = std::min<std::int64_t>(batch_size, remaining);
@@ -4367,39 +4345,16 @@ namespace Nott {
                             if (batch_targets.device().is_cpu() && !batch_targets.is_pinned()) {
                                 batch_targets = batch_targets.pin_memory();
                             }
-                        } else {
-                            batch_inputs = train_dataset.inputs.narrow(0, offset, current_batch);
+                        } else { // narrow() is a zero-copy view; parent is already pinned + correctly laid out
+                            batch_inputs  = train_dataset.inputs.narrow(0, offset, current_batch);
                             batch_targets = train_dataset.targets.narrow(0, offset, current_batch);
-                            batch_inputs = ensure_layout(std::move(batch_inputs), channels_last_inputs);
-                            batch_targets = ensure_layout(std::move(batch_targets), false);
-                            if (batch_inputs.device().is_cpu() && !batch_inputs.is_pinned()) {
-                                batch_inputs = batch_inputs.pin_memory();
-                            }
-                            if (batch_targets.device().is_cpu() && !batch_targets.is_pinned()) {
-                                batch_targets = batch_targets.pin_memory();
-                            }
                         }
-
                         return std::pair<torch::Tensor, torch::Tensor>{
                             std::move(batch_inputs), std::move(batch_targets)
                         };
                     };
 
-                    auto resolve_batch_signature = [&](std::int64_t batch_size,
-                                                       const torch::Tensor &inputs,
-                                                       const torch::Tensor &targets) -> const BatchSignature & {
-                        auto iterator = batch_signature_cache.find(batch_size);
-                        if (iterator == batch_signature_cache.end()) {
-                            iterator = batch_signature_cache.emplace(
-                                batch_size, BatchSignature::from_tensors(inputs, targets)).first;
-                            return iterator->second;
-                        }
-                        if (!iterator->second.matches(inputs, targets)) {
-                            iterator->second = BatchSignature::from_tensors(inputs, targets);
-                        }
-
-                        return iterator->second;
-                    };
+                    const BatchSignature *batch_signature{nullptr}; // Deprecate, TODO: remove it
 
                     auto process_batch = [&](torch::Tensor batch_inputs, torch::Tensor batch_targets) {
                         if (!batch_inputs.defined() || !batch_targets.defined()) {
@@ -4414,69 +4369,33 @@ namespace Nott {
                         torch::Tensor loss;
                         bool replay_retry_attempted = false;
 
-
-                        {
-                            NvtxRange data_range("Nott::Model::train::data_preparation");
-                            batch_inputs = stage_to_device(std::move(batch_inputs), device_batch_inputs_buffer,
-                                                           channels_last_inputs);
-                            batch_targets = stage_to_device(std::move(batch_targets), device_batch_targets_buffer,
-                                                            false);
-                        }
-
-
                         while (true) {
                             GraphMode batch_graph_mode = graph_mode;
                             const BatchSignature *batch_signature{nullptr};
 
                             if (graph_mode == GraphMode::Capture) {
-                                const auto &resolved_signature = resolve_batch_signature(
-                                    current_batch, batch_inputs, batch_targets);
-                                batch_signature = &resolved_signature;
-
-                                bool capture_ready = false;
-                                if (batch_signature && active_graph_signature && *active_graph_signature == *
-                                    batch_signature) {
-                                    auto readiness = graph_capture_ready.find(*batch_signature);
-                                    capture_ready = (readiness != graph_capture_ready.end()) && readiness->second;
-                                }
-
-                                if (!capture_ready) {
-                                    batch_graph_mode = GraphMode::Capture;
-
-
-                                    graph_capture_ready[*batch_signature] = false;
-
-                                    if (!active_graph_signature || *active_graph_signature != *batch_signature) {
-                                        if (active_graph_signature) {
-                                            graph_capture_ready[*active_graph_signature] = false;
-                                        }
-                                        active_graph_signature.reset();
-                                    }
-
+                                // Build signature once per unique batch size; reuse on match
+                                if (graph_capture_status == GraphCaptureStatus::NeverCaptured || !active_batch_signature.matches(batch_inputs, batch_targets)) { // New shape -> restart
+                                    active_batch_signature = BatchSignature::from_tensors(batch_inputs, batch_targets);
+                                    graph_capture_status  = GraphCaptureStatus::Pending;
                                     model.reset_graph_shape_cache(GraphMode::Capture);
-                                } else {
+                                    batch_graph_mode = GraphMode::Capture;
+                                } else if (graph_capture_status == GraphCaptureStatus::Pending) { // same shape, capture not yet confirmed
+                                    batch_graph_mode = GraphMode::Capture;
+                                } else { // Replay-ready
                                     batch_graph_mode = GraphMode::Replay;
                                 }
                             }
-
                             try {
                                 if (graph_mode_enabled) {
                                     model.prepare_optimizers_for_graph(batch_graph_mode);
                                     model.ensure_graph_batch_shapes(batch_graph_mode, batch_inputs, batch_targets);
                                 }
 
-                                loss = training_step(model, batch_inputs, batch_targets, batch_graph_mode,
-                                                     regularization_active, amp_enabled);
+                                loss = training_step(model, batch_inputs, batch_targets, batch_graph_mode, regularization_active, amp_enabled);
 
-                                if (graph_mode == GraphMode::Capture) {
-                                    if (batch_signature) {
-                                        if (batch_graph_mode == GraphMode::Capture) {
-                                            graph_capture_ready[*batch_signature] = true;
-                                            active_graph_signature = *batch_signature;
-                                        } else if (batch_graph_mode == GraphMode::Replay) {
-                                            active_graph_signature = *batch_signature;
-                                        }
-                                    }
+                                if (graph_mode == GraphMode::Capture && batch_graph_mode == GraphMode::Capture) {
+                                    graph_capture_status = GraphCaptureStatus::Ready;
                                 }
 
                                 break;
@@ -4486,10 +4405,7 @@ namespace Nott {
                                 }
 
                                 if (batch_graph_mode == GraphMode::Replay && !replay_retry_attempted) {
-                                    graph_capture_ready[*batch_signature] = false;
-                                    if (active_graph_signature && *active_graph_signature == *batch_signature) {
-                                        active_graph_signature.reset();
-                                    }
+                                    graph_capture_status = GraphCaptureStatus::Pending;
                                     model.reset_graph_shape_cache(GraphMode::Capture);
                                     replay_retry_attempted = true;
                                     continue;
@@ -4500,16 +4416,13 @@ namespace Nott {
                         }
 
                         {
-                            NvtxRange idle_range("Nott::Model::train::kernel_idle");
                             model.step_scheduler();
-
 
                             if (regularization_active) {
                                 model.update_regularization_states(step_index, true);
                             }
                             ++step_index;
                             ++processed_steps;
-
 
                             const auto loss_value = loss.detach().item<double>();
                             accumulation_val += loss_value * static_cast<double>(current_batch);
@@ -4821,11 +4734,13 @@ namespace Nott {
                                                       : 0;
 
 
-                auto accumulation = torch::zeros({}, torch::TensorOptions().dtype(torch::kFloat64).device(device));
+                double accumulation_val = 0.0;
                 std::int64_t weight = 0;
 
                 torch::Tensor device_batch_inputs_buffer;
                 torch::Tensor device_batch_targets_buffer;
+
+
 
                 auto stage_to_device = [&](torch::Tensor tensor, torch::Tensor &buffer, bool apply_channels_last) {
                     tensor = ensure_layout(std::move(tensor), apply_channels_last);
@@ -4915,13 +4830,7 @@ namespace Nott {
                         }
                     }
 
-                    auto loss_tensor = loss.detach();
-                    if (loss_tensor.device() != accumulation.device()) {
-                        loss_tensor = loss_tensor.to(accumulation.device());
-                    }
-                    loss_tensor = loss_tensor.to(torch::kFloat64);
-                    loss_tensor.mul_(static_cast<double>(current_batch));
-                    accumulation.add_(loss_tensor);
+                    accumulation_val += loss.detach().item<double>() * static_cast<double>(current_batch);
                     weight += current_batch;
                 };
 
@@ -4949,9 +4858,9 @@ namespace Nott {
                     return std::nullopt;
                 }
 
-                auto averaged_loss_tensor = accumulation / static_cast<double>(weight);
-                auto loss_scalar = TrainingTelemetry::DeferredScalar::from_tensor(
-                    std::move(averaged_loss_tensor), device);
+                auto averaged_loss_tensor = torch::tensor(accumulation_val / static_cast<double>(weight), torch::TensorOptions().dtype(torch::kFloat64));
+                const torch::Device cpu_device{torch::kCPU};
+                auto loss_scalar = TrainingTelemetry::DeferredScalar::from_tensor(std::move(averaged_loss_tensor), cpu_device);
                 auto learning_rates = model.collect_learning_rates();
                 const auto timestamp = std::chrono::system_clock::now();
                 model.record_dataset_loss_telemetry({
