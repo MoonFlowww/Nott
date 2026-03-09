@@ -4147,7 +4147,6 @@ namespace Nott {
                     }
                 };
 
-
                 torch::Tensor device_batch_inputs_buffer;
                 torch::Tensor device_batch_targets_buffer;
                 bool input_buffer_stable = false;
@@ -4167,6 +4166,8 @@ namespace Nott {
                     std::array<torch::Tensor, 2> targets{};
                     std::array<at::cuda::CUDAEvent, 2> events{at::cuda::CUDAEvent{}, at::cuda::CUDAEvent{}};
                     std::array<bool, 2> pending{false, false};
+                    std::array<bool, 2> input_stable{false, false};
+                    std::array<bool, 2> target_stable{false, false};
                 };
 
                 std::optional<PrefetchState> prefetch_state{};
@@ -4247,16 +4248,21 @@ namespace Nott {
                         return false;
                     }
 
-                    prefetch_state->inputs[slot] = stage_to_device(std::move(batch.first),
-                                                                   prefetch_state->inputs[slot],
-                                                                   channels_last_inputs,
-                                                                   /*force_non_blocking=*/true,
-                                                                   /*use_prefetch_stream=*/true);
-                    prefetch_state->targets[slot] = stage_to_device(std::move(batch.second),
-                                                                    prefetch_state->targets[slot],
-                                                                    /*apply_channels_last=*/false,
-                                                                    /*force_non_blocking=*/true,
-                                                                    /*use_prefetch_stream=*/true);
+                    prefetch_state->inputs[slot] = stage_to_device(
+                        std::move(batch.first),
+                        prefetch_state->inputs[slot],
+                        prefetch_state->input_stable[slot],
+                        channels_last_inputs,
+                        /*force_non_blocking=*/true,
+                        /*use_prefetch_stream=*/true);
+
+                    prefetch_state->targets[slot] = stage_to_device(
+                        std::move(batch.second),
+                        prefetch_state->targets[slot],
+                        prefetch_state->target_stable[slot],
+                        /*apply_channels_last=*/false,
+                        /*force_non_blocking=*/true,
+                        /*use_prefetch_stream=*/true);
 
                     {
                         torch::cuda::CUDAStreamGuard guard(prefetch_state->stream);
