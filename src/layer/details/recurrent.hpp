@@ -168,8 +168,8 @@ namespace Nott::Layer::Details {
 
                 // cuDNN setup (use new precision API instead of deprecated allowTF32)
                 const char* tf32_setting = options_.allow_tf32 ? "tf32" : "none";
-                at::globalContext().setFloat32Precision("cuda", "rnn", tf32_setting);
-                at::globalContext().setFloat32Precision("cuda", "conv", tf32_setting);
+                at::globalContext().setAllowTF32CuDNN(options_.allow_tf32);
+                at::globalContext().setAllowTF32CuBLAS(options_.allow_tf32);
                 if (torch::cuda::is_available() && torch::cuda::cudnn_is_available()) {
                     at::globalContext().setBenchmarkCuDNN(options_.benchmark_cudnn);
                 }
@@ -329,8 +329,9 @@ namespace Nott::Layer::Details {
         }
 
         const char* tf32_setting = descriptor.options.allow_tf32 ? "tf32" : "none";
-        at::globalContext().setFloat32Precision("cuda", "rnn", tf32_setting);
-        at::globalContext().setFloat32Precision("cuda", "conv", tf32_setting);
+        at::globalContext().setAllowTF32CuDNN(descriptor.options.allow_tf32);   // covers RNN + conv via cuDNN
+        at::globalContext().setAllowTF32CuBLAS(descriptor.options.allow_tf32);
+
         if (torch::cuda::is_available() && torch::cuda::cudnn_is_available()) {
             at::globalContext().setBenchmarkCuDNN(descriptor.options.benchmark_cudnn);
             if (module && !module->parameters().empty()) {
