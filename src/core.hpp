@@ -3849,8 +3849,9 @@ namespace Nott {
                     if (state.dirty) {
                         reset_graph_shape_cache(GraphMode::Capture);
                     }
-
-      } else {
+                    if (!state.graph) {
+                        state.graph = std::make_unique<torch::cuda::CUDAGraph>();
+                    } else {
                         state.graph->reset();
                     }
 
@@ -3930,28 +3931,20 @@ namespace Nott {
                     copy_into_graph_input_buffer(std::move(batch_inputs), workspace_tensor_policy(GraphMode::Replay));
                     auto detached_targets = batch_targets.detach();
                     detached_targets.requires_grad_(false);
-                    copy_tensor_into(
-                        state.target_buffer,
-                        detached_targets,
-                        workspace_tensor_policy(GraphMode::Replay));
+                    copy_tensor_into(state.target_buffer, detached_targets, workspace_tensor_policy(GraphMode::Replay));
                     if (!state.capture_stream.has_value()) {
                         throw std::runtime_error(
                             "CUDA graph replay requested for training without an associated capture stream.");
                     }
-      }
                     torch::cuda::CUDAStreamGuard guard(*state.capture_stream);
-#ifdef TORCH_CUDA_AVAILABLE
                     if (use_amp && amp_scaler_ && state.amp_scaler_state_valid) {
                         amp_scaler_->load_state_dict(state.amp_scaler_state);
                     }
-#endif
                     state.graph->replay();
-#ifdef TORCH_CUDA_AVAILABLE
                     if (use_amp && amp_scaler_) {
                         state.amp_scaler_state = amp_scaler_->state_dict();
                         state.amp_scaler_state_valid = true;
                     }
-#endif
                     return state.loss_buffer;
 #else
                     throw std::runtime_error("CUDA graph replay requested but CUDA support is unavailable.");
@@ -4207,8 +4200,7 @@ namespace Nott {
                     }
 
                     if (!stable) {
-                        if (!buffer.defined() || buffer.device() != device || buffer.scalar_type() != tensor.scalar_type() || !buffer.sizes().equals(tensor.sizes())
-                            || (requires_channels_last ? !buffer.is_contiguous(torch::MemoryFormat::ChannelsLast) : !buffer.is_contiguous())) {
+                        if (!buffer.defined() || buffer.device() != device || buffer.scalar_type() != tensor.scalar_type() || !buffer.sizes().equals(tensor.sizes()) || (requires_channels_last ? !buffer.is_contiguous(torch::MemoryFormat::ChannelsLast) : !buffer.is_contiguous())) {
                             const auto memory_format = requires_channels_last ? torch::MemoryFormat::ChannelsLast : torch::MemoryFormat::Contiguous;
                             buffer = torch::empty(tensor.sizes(), options, memory_format);
                         } else {
@@ -4285,6 +4277,12 @@ namespace Nott {
                     if constexpr (ShouldShuffle) {
                         input_buffer_stable  = false;
                         target_buffer_stable = false;
+#ifdef TORCH_CUDA_AVAILABLE
+                        if (prefetch_state) {
+                            prefetch_state->input_stable.fill(false);
+                            prefetch_state->target_stable.fill(false);
+                        }
+#endif
                         epoch_indices = (total_samples > 1) ? torch::randperm(total_samples, index_options) : torch::arange(total_samples, index_options);
                     }
 
