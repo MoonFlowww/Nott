@@ -2449,6 +2449,7 @@ namespace Nott {
             if (!loss_descriptor_.has_value()) {
                 throw std::logic_error("Loss function has not been configured.");
             }
+
             const torch::Tensor &aligned_target = target.device() == prediction.device() ? target : target.to(prediction.device());
             return std::visit(
                 [&](const auto &descriptor) {
