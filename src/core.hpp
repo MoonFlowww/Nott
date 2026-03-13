@@ -4202,13 +4202,17 @@ namespace Nott {
 
                     const bool requires_channels_last = apply_channels_last && tensor.dim() >= 4;
 
+                    if (stable && buffer.defined() && !buffer.sizes().equals(tensor.sizes())) {
+                        stable = false;
+                    }
+
                     if (!stable) {
-                        if (!buffer.defined() || buffer.device() != device || buffer.scalar_type() != tensor.scalar_type() || !buffer.sizes().equals(tensor.sizes()) ||
-                            (requires_channels_last ? !buffer.is_contiguous(torch::MemoryFormat::ChannelsLast) : !buffer.is_contiguous())) {
+                        if (!buffer.defined() || buffer.device() != device || buffer.scalar_type() != tensor.scalar_type() || !buffer.sizes().equals(tensor.sizes())
+                            || (requires_channels_last ? !buffer.is_contiguous(torch::MemoryFormat::ChannelsLast) : !buffer.is_contiguous())) {
                             const auto memory_format = requires_channels_last ? torch::MemoryFormat::ChannelsLast : torch::MemoryFormat::Contiguous;
                             buffer = torch::empty(tensor.sizes(), options, memory_format);
                         } else {
-                            stable = true;  // Buffer confirmed correct; skip checks for future iters
+                            stable = true;
                         }
                     }
 
@@ -4366,6 +4370,7 @@ namespace Nott {
                         if (!batch_inputs.defined() || !batch_targets.defined()) {
                             return std::int64_t{0};
                         }
+
 
                         const auto current_batch = batch_targets.size(0);
                         if (current_batch <= 0) {
