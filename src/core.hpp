@@ -1764,7 +1764,7 @@ namespace Nott {
             } else {
                 device_ = torch::Device(torch::kCPU, /*index=*/0);
             }
-
+            cached_autocast_dtype_.reset();
             this->to(device_);
             return *this;
         }
@@ -2114,18 +2114,19 @@ namespace Nott {
                 }
 #endif
             }
+            if (!workspace.output.defined()) {
+                // Fallback: no Output execution step ran; pull directly from the node buffer.
 #ifndef NDEBUG
-            assert(output_index < workspace.node_buffers.size());
+                assert(output_index < workspace.node_buffers.size());
 #endif
 
-            auto output_tensor = workspace.node_buffers[output_index];
-            if (!output_tensor.defined()) {
-                throw std::runtime_error("Model::forward produced an undefined tensor at the output node.");
+                auto output_tensor = workspace.node_buffers[output_index];
+                if (!output_tensor.defined()) {
+                    throw std::runtime_error("Model::forward produced an undefined tensor at the output node.");
+                }
+                copy_tensor_into(workspace.output, output_tensor, workspace_tensor_policy(graph_mode));
+                workspace.bind_output(output_index);
             }
-
-            copy_tensor_into(workspace.output, output_tensor, workspace_tensor_policy(graph_mode));
-            workspace.bind_output(output_index);
-
             auto result = graph_output_tensor();
 
             return apply_calibrations(std::move(result));
@@ -2449,7 +2450,6 @@ namespace Nott {
             if (!loss_descriptor_.has_value()) {
                 throw std::logic_error("Loss function has not been configured.");
             }
-
             const torch::Tensor &aligned_target = target.device() == prediction.device() ? target : target.to(prediction.device());
             return std::visit(
                 [&](const auto &descriptor) {
@@ -3153,13 +3153,14 @@ namespace Nott {
                 return;
             }
 
-            if (!destination.defined()) {
-                destination = source.clone(torch::MemoryFormat::Preserve);
+            if (policy == WorkspaceTensorPolicy::RebindStorage) {
+                // Rebind the destination handle to share the source's storage
+                destination = source;
                 return;
             }
 
 
-            if (policy == WorkspaceTensorPolicy::RebindStorage) {
+            if (!destination.defined()) {
                 destination = source.clone(torch::MemoryFormat::Preserve);
                 return;
             }
@@ -3270,7 +3271,6 @@ namespace Nott {
 
             if (tensor.device() != device_) {
                 tensor = tensor.to(device_, /*non_blocking=*/device_.is_cuda());
-                tensor = ensure_input_memory_format(std::move(tensor));
             }
 
             return tensor;
@@ -4290,7 +4290,7 @@ namespace Nott {
 
 
 
-                    double accumulation_val = 0.0;
+                    torch::Tensor accumulation_tensor = torch::zeros({}, torch::TensorOptions().dtype(torch::kFloat64).device(device));
                     std::int64_t weight = 0;
                     std::size_t processed_steps = 0;
 
@@ -4435,8 +4435,10 @@ namespace Nott {
                             ++step_index;
                             ++processed_steps;
 
-                            const auto loss_value = loss.detach().item<double>();
-                            accumulation_val += loss_value * static_cast<double>(current_batch);
+                            {
+                                auto detached_loss = loss.detach().to(torch::kFloat64);
+                                accumulation_tensor += detached_loss * static_cast<double>(current_batch);
+                            }
 
                         }
                         return current_batch;
@@ -4544,10 +4546,13 @@ namespace Nott {
                     }
 
                     TrainingTelemetry::DeferredScalar train_loss_scalar;
-                    auto train_loss_tensor = torch::zeros({}, torch::TensorOptions().dtype(torch::kFloat64));
+                    torch::Tensor train_loss_tensor;
                     if (weight > 0) {
-                        train_loss_tensor = torch::tensor(accumulation_val / static_cast<double>(weight), torch::TensorOptions().dtype(torch::kFloat64));
-                    } train_loss_scalar = TrainingTelemetry::DeferredScalar::from_tensor(std::move(train_loss_tensor), device);
+                        train_loss_tensor = (accumulation_tensor / static_cast<double>(weight)).cpu();
+                    } else {
+                        train_loss_tensor = torch::zeros({}, torch::TensorOptions().dtype(torch::kFloat64));
+                    }
+                    train_loss_scalar = TrainingTelemetry::DeferredScalar::from_tensor(std::move(train_loss_tensor), device);
                     last_train_loss_scalar = train_loss_scalar;
 
                     std::optional<TrainingTelemetry::DeferredScalar> test_loss_scalar{};
@@ -4728,8 +4733,6 @@ namespace Nott {
                     return tensor;
                 };
 
-                dataset_inputs = ensure_layout(std::move(dataset_inputs), channels_last_inputs);
-                dataset_targets = ensure_layout(std::move(dataset_targets), false);
 
                 if (dataset_inputs.device().is_cpu() && !dataset_inputs.is_pinned()) {
                     dataset_inputs = dataset_inputs.pin_memory();
@@ -4786,8 +4789,6 @@ namespace Nott {
                     if (!batch_inputs.defined() || !batch_targets.defined()) {
                         return std::nullopt;
                     }
-                    batch_inputs = ensure_layout(std::move(batch_inputs), channels_last_inputs);
-                    batch_targets = ensure_layout(std::move(batch_targets), false);
 
                     auto staged_inputs = stage_to_device(std::move(batch_inputs),
                                                          device_batch_inputs_buffer,
@@ -4991,6 +4992,7 @@ namespace Nott {
         std::function<void(const torch::Tensor &, bool)> staging_observer_{};
         bool has_convolutional_layers_{false};
         bool amp_training_active_{false};
+        mutable std::optional<torch::ScalarType> cached_autocast_dtype_{};
 #ifdef TORCH_CUDA_AVAILABLE
         std::optional<torch::cuda::amp::GradScaler> amp_scaler_{};
 #endif
@@ -5099,16 +5101,22 @@ namespace Nott {
         };
 
         [[nodiscard]] torch::ScalarType determine_autocast_dtype() const {
+            if (cached_autocast_dtype_) {
+                return *cached_autocast_dtype_;
+            }
             for (const auto &parameter: this->parameters(/*recurse=*/false)) {
                 if (parameter.defined()) {
-                    return parameter.scalar_type();
+                    cached_autocast_dtype_ = parameter.scalar_type();
+                    return *cached_autocast_dtype_;
                 }
             }
             for (const auto &buffer: this->buffers(/*recurse=*/false)) {
                 if (buffer.defined()) {
-                    return buffer.scalar_type();
+                    cached_autocast_dtype_ = buffer.scalar_type();
+                    return *cached_autocast_dtype_;
                 }
             }
+            cached_autocast_dtype_ = torch::kFloat32;
             return torch::kFloat32;
         }
 
