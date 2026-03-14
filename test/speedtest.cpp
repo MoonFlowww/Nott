@@ -140,6 +140,7 @@ namespace LatencyUtils {
         const double min_ms = stats.steps == 0 ? 0.0 : stats.min_ms;
         const double max_ms = stats.steps == 0 ? 0.0 : stats.max_ms;
         const double mu     = stats.average_ms();
+        const double med = stats.median_ms;
         const double std    = stats.std_ms();
         const double skew   = stats.skew();
 
@@ -147,6 +148,7 @@ namespace LatencyUtils {
         std::cout
             << "  Steps (after filters): " << stats.steps << "\n"
             << "  Avg latency:           " << mu   << " ms\n"
+            << "  Med latency:           " << med   << " ms\n"
             << "  Std latency:           " << std  << " ms\n"
             << "  Skew latency:          " << skew << "\n";
 
@@ -253,7 +255,7 @@ namespace LatencyUtils {
 
 
 
-    StepLatencyStats build_stats_from_samples(const std::string& title, const std::vector<double>& samples, std::size_t warmup_steps = 100, double tukey_k = 1.f) {
+    StepLatencyStats build_stats_from_samples(const std::string& title, const std::vector<double>& samples, std::size_t warmup_steps = 100, double tukey_k = 1.0) {
         StepLatencyStats stats{title};
 
         if (samples.size() <= warmup_steps)
@@ -295,7 +297,7 @@ namespace LatencyUtils {
             stats.median_ms = quantile_linear(filtered, 0.50);
             stats.p10_ms    = quantile_linear(filtered, 0.10);
             stats.p90_ms    = quantile_linear(filtered, 0.90);
-            stats.p98_ms    = quantile_linear(filtered, false);
+            stats.p98_ms    = quantile_linear(filtered, 0.98);
             stats.mode_ms   = estimate_mode_from_sorted(filtered);
         }
 
@@ -482,7 +484,7 @@ int main() {
     Nott::Model model1("");
     set(model1, IsCuda); // define the network
     model1.clear_training_telemetry(); // not necessary
-    model1.train(x1, y1, {.epoch = epochs, .batch_size = B, .shuffle=false, .monitor = true, .buffer_vram=2, .graph_mode = Nott::GraphMode::Disabled, .enable_amp = true, .memory_format = torch::MemoryFormat::Preserve});
+    model1.train(x1, y1, {.epoch = epochs, .batch_size = B, .shuffle=false, .monitor = true, .buffer_vram=2, .graph_mode = Nott::GraphMode::Disabled, .enable_amp = true, .memory_format = torch::MemoryFormat::ChannelsLast});
 
     const auto& telemetry = model1.training_telemetry();
     for (const auto& epoch : telemetry.epochs()) {
@@ -517,13 +519,21 @@ int main() {
     const auto ce = set(model2, IsCuda); // define the network
     model2.clear_training_telemetry(); // not necessary
 
+    // Pin host tensors once so all subsequent narrow()+to(CUDA, non_blocking=true) transfers
+    // go through DMA without stalling the CPU | same I/O path the prebuilt runner uses.
+    if (IsCuda) {
+        if (!x1.is_pinned()) x1 = x1.pin_memory();
+        if (!y1.is_pinned()) y1 = y1.pin_memory();
+    }
+
     for (int64_t e = 0; e < epochs; ++e) {
         for (int64_t i = 0; i < N; i += B) {
             auto step_start = std::chrono::high_resolution_clock::now();
             const int64_t end = std::min(i + B, N);
 
-            auto inputs  = x1.index({torch::indexing::Slice(i, end)}).to(torch::kCUDA);
-            auto targets = y1.index({torch::indexing::Slice(i, end)}).to(torch::kCUDA);
+            const bool nb = IsCuda && x1.is_pinned();
+            auto inputs  = x1.narrow(0, i, end - i).to(torch::kCUDA, x1.scalar_type(), nb);
+            auto targets = y1.narrow(0, i, end - i).to(torch::kCUDA, y1.scalar_type(), nb);
 
             model2.zero_grad();
             auto logits = model2.forward(inputs);
@@ -559,8 +569,9 @@ int main() {
         for (int64_t i = 0; i < N; i += B) { auto step_start = std::chrono::high_resolution_clock::now();
             const int64_t end = std::min(i + B, N);
 
-            auto inputs  = x1.index({at::indexing::Slice(i, end)}).to(torch::kCUDA); //stage_for_device(x1.index({torch::indexing::Slice(i, end)}), IsCuda);
-            auto targets = y1.index({at::indexing::Slice(i, end)}).to(torch::kCUDA); //stage_for_device(y1.index({torch::indexing::Slice(i, end)}), IsCuda);
+            const bool nb = IsCuda && x1.is_pinned();
+            auto inputs  = x1.narrow(0, i, end - i).to(torch::kCUDA, x1.scalar_type(), nb);
+            auto targets = y1.narrow(0, i, end - i).to(torch::kCUDA, y1.scalar_type(), nb);
 
             optimizer.zero_grad();
             auto logits = net->forward(inputs);
@@ -581,13 +592,13 @@ int main() {
     std::cout << "\n\n\n";
 
     const LatencyUtils::StepLatencyStats Nott_prebuilt_stats =
-        LatencyUtils::build_stats_from_samples("Nott Train() (Tukey false)", Nott_prebuilt_samples, 200, -1);
+        LatencyUtils::build_stats_from_samples("Nott Train() (Tukey 0.98)", Nott_prebuilt_samples, 500, 0.98);
 
     const LatencyUtils::StepLatencyStats Nott_custom_stats =
-        LatencyUtils::build_stats_from_samples("Nott + Custom Train() (Tukey false)", Nott_custom_samples, 200, -1);
+        LatencyUtils::build_stats_from_samples("Nott + Custom Train() (Tukey 0.98)", Nott_custom_samples, 500, 0.98);
 
     const LatencyUtils::StepLatencyStats libtorch_stats =
-        LatencyUtils::build_stats_from_samples("Libtorch Raw (Tukey false)", libtorch_samples, 200, -1);
+        LatencyUtils::build_stats_from_samples("Libtorch Raw (Tukey 0.98)", libtorch_samples, 500, 0.98);
 
     print_stats(Nott_prebuilt_stats);
     print_stats(Nott_custom_stats);
@@ -614,6 +625,6 @@ int main() {
     print_metrics("Nott Custom Train()", Nott_custom_metrics);
     print_metrics("LibTorch", libtorch_metrics);
 
-    std::cout << "\n\n [Nott]Total Runtime: " << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now()-t1).count()/60.0f << "min"<< std::endl;
+    std::cout << "\n\n Total Runtime: " << std::chrono::duration_cast<std::chrono::seconds>(std::chrono::high_resolution_clock::now()-t1).count()/60.0f << "min"<< std::endl;
     return 0;
 }
