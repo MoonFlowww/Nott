@@ -1,6 +1,6 @@
 #ifndef Nott_SWIGLU_HPP
 #define Nott_SWIGLU_HPP
-// "PaLM: Scaling Language Modeling with Pathways" (introduces SwiGLU) https://arxiv.org/pdf/2204.02311
+/// "PaLM: Scaling Language Modeling with Pathways" (introduces SwiGLU) https://arxiv.org/pdf/2204.02311
 #include <torch/torch.h>
 
 #include <utility>

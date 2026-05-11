@@ -1,9 +1,9 @@
 #ifndef Nott_CLASSIC_HPP
 #define Nott_CLASSIC_HPP
 
-// "Attention Is All You Need" — Vaswani et al., NeurIPS 2017 (arXiv:1706.03762).
-// Canonical encoder/decoder transformer with multi-head self-attention, position encodings,
-// residual connections, and feed-forward sublayers serving as the baseline architecture.
+/// "Attention Is All You Need", Vaswani et al., NeurIPS 2017 (arXiv:1706.03762).
+/// Canonical encoder/decoder transformer with multi-head self-attention, position encodings,
+/// residual connections, and feed-forward sublayers serving as the baseline architecture.
 
 #include <algorithm>
 #include <cstddef>

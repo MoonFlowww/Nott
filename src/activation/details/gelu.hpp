@@ -1,6 +1,6 @@
 #ifndef Nott_GELU_HPP
 #define Nott_GELU_HPP
-// "Gaussian Error Linear Units (GELUs)" https://arxiv.org/pdf/1606.08415
+/// "Gaussian Error Linear Units (GELUs)" https://arxiv.org/pdf/1606.08415
 #include <torch/torch.h>
 
 #include <utility>

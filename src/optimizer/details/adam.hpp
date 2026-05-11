@@ -1,8 +1,8 @@
 #ifndef Nott_ADAM_HPP
 #define Nott_ADAM_HPP
-// Adam: https://arxiv.org/pdf/1412.6980
-// AdamW: https://arxiv.org/pdf/1711.05101
-// Adan: https://arxiv.org/pdf/2208.06677
+/// Adam: https://arxiv.org/pdf/1412.6980
+/// AdamW: https://arxiv.org/pdf/1711.05101
+/// Adan: https://arxiv.org/pdf/2208.06677
 
 
 #include <tuple>
@@ -59,31 +59,31 @@ namespace Nott::Optimizer::Details {
         return torch_options;
     }
 
-    // --- Adam wrapper ---
+    /// --- Adam wrapper ---
     class Adam : public torch::optim::Adam {
     public:
-        // 1) ctor for simple param list (vector<at::Tensor>)
+        /// 1) ctor for simple param list (vector<at::Tensor>)
         Adam(std::vector<at::Tensor> params,
              const torch::optim::AdamOptions& options,
              std::vector<std::vector<at::Tensor>> warmup_buckets = {})
             : torch::optim::Adam(std::move(params), options),
               warmup_buckets_(std::move(warmup_buckets)) {}
 
-        // 2) ctor for param groups (const lvalue ref)
+        /// 2) ctor for param groups (const lvalue ref)
         Adam(const std::vector<torch::optim::OptimizerParamGroup>& param_groups,
              const torch::optim::AdamOptions& options,
              std::vector<std::vector<at::Tensor>> warmup_buckets = {})
             : torch::optim::Adam(param_groups, options),
               warmup_buckets_(std::move(warmup_buckets)) {}
 
-        // 3) ctor for param groups (rvalue)
+        /// 3) ctor for param groups (rvalue)
         Adam(std::vector<torch::optim::OptimizerParamGroup>&& param_groups,
              const torch::optim::AdamOptions& options,
              std::vector<std::vector<at::Tensor>> warmup_buckets = {})
             : torch::optim::Adam(std::move(param_groups), options),
               warmup_buckets_(std::move(warmup_buckets)) {}
 
-        // 4) Generic forwarding ctor — only enabled if torch::optim::Adam is constructible
+        /// Generic forwarding ctor, only enabled if torch::optim::Adam is constructible.
         template <typename ParamsT,
                   typename = std::enable_if_t<
                       std::is_constructible_v<torch::optim::Adam, ParamsT, torch::optim::AdamOptions>
@@ -94,7 +94,7 @@ namespace Nott::Optimizer::Details {
             : torch::optim::Adam(std::forward<ParamsT>(params), options),
               warmup_buckets_(std::move(warmup_buckets)) {}
 
-        // Initialize internal state (exp_avg, exp_avg_sq, max_exp_avg_sq) for all params.
+        /// Initialize internal state (exp_avg, exp_avg_sq, max_exp_avg_sq) for all params.
         void ensure_state_initialized() {
             std::vector<std::vector<at::Tensor>> buckets = warmup_buckets_;
             if (buckets.empty()) {
@@ -155,31 +155,31 @@ namespace Nott::Optimizer::Details {
 
     using AdamOptimizer = Adam;
 
-    // --- AdamW wrapper ---
+    /// --- AdamW wrapper ---
     class AdamW : public torch::optim::AdamW {
     public:
-        // 1) ctor for simple param list (vector<at::Tensor>)
+        /// 1) ctor for simple param list (vector<at::Tensor>)
         AdamW(std::vector<at::Tensor> params,
               const torch::optim::AdamWOptions& options,
               std::vector<std::vector<at::Tensor>> warmup_buckets = {})
             : torch::optim::AdamW(std::move(params), options),
               warmup_buckets_(std::move(warmup_buckets)) {}
 
-        // 2) ctor for param groups (const lvalue ref)
+        /// 2) ctor for param groups (const lvalue ref)
         AdamW(const std::vector<torch::optim::OptimizerParamGroup>& param_groups,
               const torch::optim::AdamWOptions& options,
               std::vector<std::vector<at::Tensor>> warmup_buckets = {})
             : torch::optim::AdamW(param_groups, options),
               warmup_buckets_(std::move(warmup_buckets)) {}
 
-        // 3) ctor for param groups (rvalue)
+        /// 3) ctor for param groups (rvalue)
         AdamW(std::vector<torch::optim::OptimizerParamGroup>&& param_groups,
               const torch::optim::AdamWOptions& options,
               std::vector<std::vector<at::Tensor>> warmup_buckets = {})
             : torch::optim::AdamW(std::move(param_groups), options),
               warmup_buckets_(std::move(warmup_buckets)) {}
 
-        // 4) Generic forwarding ctor — only enabled if torch::optim::AdamW is constructible
+        /// Generic forwarding ctor, only enabled if torch::optim::AdamW is constructible.
         template <typename ParamsT,
                   typename = std::enable_if_t<
                       std::is_constructible_v<torch::optim::AdamW, ParamsT, torch::optim::AdamWOptions>
@@ -190,7 +190,7 @@ namespace Nott::Optimizer::Details {
             : torch::optim::AdamW(std::forward<ParamsT>(params), options),
               warmup_buckets_(std::move(warmup_buckets)) {}
 
-        // Initialize internal state (exp_avg, exp_avg_sq, max_exp_avg_sq) for all params.
+        /// Initialize internal state (exp_avg, exp_avg_sq, max_exp_avg_sq) for all params.
         void ensure_state_initialized() {
             std::vector<std::vector<at::Tensor>> buckets = warmup_buckets_;
             if (buckets.empty()) {

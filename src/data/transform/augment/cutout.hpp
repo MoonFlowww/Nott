@@ -98,7 +98,7 @@ namespace Nott::Data::Transform::Augmentation {
             for (int64_t c = 0; c < static_cast<int64_t>(fill.size()) && c < n_channels; ++c) {
                 const auto v = fill[c];
                 if (v >= 0) {
-                    // Map 0–255 to [0,1] for floating types, or keep as is otherwise
+                    /// Map 0-255 to [0,1] for floating types, or keep as is otherwise
                     double val;
                     if (tensor.is_floating_point()) {
                         val = static_cast<double>(v) / 255.0;

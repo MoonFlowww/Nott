@@ -17,7 +17,7 @@
  */
 
 #include <torch/torch.h>
-// GraphMode fwd-declared via training_policy.hpp  // GraphMode
+/// GraphMode fwd-declared via training_policy.hpp  // GraphMode
 
 #ifdef TORCH_CUDA_AVAILABLE
 #include <torch/cuda.h>
@@ -57,7 +57,7 @@ torch::Tensor execute_training_step(
     StepOptimFn&&     step_optim,
     BackwardFn&&      do_backward)
 {
-    /* forward + loss */
+    /// Forward + loss
     torch::Tensor prediction;
     torch::Tensor loss;
     {
@@ -72,7 +72,7 @@ torch::Tensor execute_training_step(
         if (loss.dim() != 0) loss = loss.mean();
     }
 
-    /* regularisation */
+    /// Regularisation
     if (regularization_active) {
         auto penalty = model.compute_regularization_penalty(mode);
         if (penalty.defined()) {
@@ -82,7 +82,7 @@ torch::Tensor execute_training_step(
                 if (penalty.scalar_type() != loss.scalar_type())
                     penalty = penalty.to(loss.scalar_type());
             } else {
-                /* Graph mode: shapes must be static; throw on mismatch */
+                /// Graph mode: shapes must be static; throw on mismatch
                 if (penalty.device() != loss.device())
                     throw std::runtime_error(
                         "Regularisation penalty device changed during CUDA graph execution.");
@@ -94,7 +94,7 @@ torch::Tensor execute_training_step(
         }
     }
 
-    /* backward + step */
+    /// Backward + step
     const bool retain = (mode != GraphMode::Disabled);
     do_backward(loss, retain);
     step_optim(model);
@@ -127,7 +127,7 @@ auto make_amp_backward(
         if (use_amp && amp_scaler) {
             auto scaled = amp_scaler->scale(loss);
             scaled.backward({}, retain);
-            /* step_optim handles scaler.step() -- caller responsibility */
+            /// step_optim handles scaler.step(), caller responsibility
         } else {
             loss.backward({}, retain);
         }

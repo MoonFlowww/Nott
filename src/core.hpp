@@ -161,7 +161,7 @@ namespace Nott {
         std::ostream *stream{&std::cout};
         std::size_t buffer_vram{Core::kDefaultTrainingConfig.buffer_vram};
         GraphMode graph_mode{GraphMode::Disabled};
-        // Enable CUDA graph capture/replay; pad or drop remainder batches first.
+        /// Enable CUDA graph capture/replay; pad or drop remainder batches first.
         bool enable_amp{false}; // Enable TensorCores
         torch::MemoryFormat memory_format{torch::MemoryFormat::Contiguous};
     };
@@ -751,7 +751,7 @@ namespace Nott {
             links(std::move(specifications), std::move(params));
         }
 
-        // Updated multi-IO + params form
+        /// Updated multi-IO + params form
         void links(std::vector<LinkSpec> specifications, LinkParams params) {
             graph_capture_opt_in_ = params.enable_graph_capture && !specifications.empty();
             invalidate_graph_captures();
@@ -776,7 +776,7 @@ namespace Nott {
             nodes.reserve(layers_.size() + specifications.size() * 2 + 2 + num_inputs + num_outputs);
             resolved_links.reserve(specifications.size());
 
-            // Build N input nodes (@input, @input[1], ...)
+            /// Build N input nodes (@input, @input[1], ...)
             std::vector<std::size_t> input_node_indices(num_inputs, std::numeric_limits<std::size_t>::max());
             for (std::size_t i = 0; i < num_inputs; ++i) {
                 CompiledNode n{};
@@ -787,7 +787,7 @@ namespace Nott {
                 input_node_indices[i] = nodes.size() - 1;
             }
 
-            // Modules
+            /// Modules
             std::vector<std::size_t> module_node_indices(layers_.size(), std::numeric_limits<std::size_t>::max());
             for (std::size_t index = 0; index < layers_.size(); ++index) {
                 CompiledNode node{};
@@ -812,7 +812,7 @@ namespace Nott {
                 module_node_indices[index] = nodes.size() - 1;
             }
 
-            // Outputs created lazily; track per-index
+            /// Outputs created lazily; track per-index
             std::vector<std::size_t> output_node_indices(num_outputs, std::numeric_limits<std::size_t>::max());
             auto ensure_output_node_k = [&](std::size_t k) -> std::size_t {
                 if (k >= num_outputs) {
@@ -951,23 +951,23 @@ namespace Nott {
                 return true;
             };
 
-            // Multi-IO
+            /// Multi-IO
             auto resolve_port = [&](Port &port, PortRole role) -> std::size_t {
                 switch (port.kind) {
                     case Port::Kind::Input: {
-                        // default single input semantics
+                        /// default single input semantics
                         if (port.identifier.empty() || iequals(port.identifier, "@input")) {
                             port.assign_node(input_node_indices.front());
                             return input_node_indices.front();
                         }
-                        // numeric?
+                        /// numeric?
                         if (auto n = parse_numeric_identifier(port.identifier)) {
                             if (*n >= input_node_indices.size())
                                 throw std::invalid_argument("Input index " + std::to_string(*n) + " out of range.");
                             port.assign_node(input_node_indices[*n]);
                             return input_node_indices[*n];
                         }
-                        // alias?
+                        /// alias?
                         if (auto it = params.inputs.find(port.identifier); it != params.inputs.end()) {
                             const auto idx = it->second;
                             if (idx >= input_node_indices.size())
@@ -980,19 +980,19 @@ namespace Nott {
                             "Unknown input '" + port.identifier + "'; use @input, #k or alias.");
                     }
                     case Port::Kind::Output: {
-                        // default single output
+                        /// default single output
                         if (port.identifier.empty() || iequals(port.identifier, "@output")) {
                             const auto idx = ensure_output_node_k(0);
                             port.assign_node(idx);
                             return idx;
                         }
-                        // numeric?
+                        /// numeric?
                         if (auto n = parse_numeric_identifier(port.identifier)) {
                             const auto idx = ensure_output_node_k(*n);
                             port.assign_node(idx);
                             return idx;
                         }
-                        // alias?
+                        /// alias?
                         if (auto it = params.outputs.find(port.identifier); it != params.outputs.end()) {
                             const auto idx = ensure_output_node_k(it->second);
                             port.assign_node(idx);
@@ -1019,7 +1019,7 @@ namespace Nott {
 
             std::unordered_map<std::size_t, std::size_t> consumer_inbound{};
 
-            // track explicit join edges to avoid duplicate inferred edges
+            /// track explicit join edges to avoid duplicate inferred edges
             std::unordered_set<std::string> auto_link_keys{};
             auto record_join_edge = [&](const LinkSpec &spec) {
                 if (!spec.target.is_join()) return;
@@ -1051,7 +1051,7 @@ namespace Nott {
                                   std::make_move_iterator(inferred_links.begin()),
                                   std::make_move_iterator(inferred_links.end()));
 
-            // Apply links
+            /// Apply links
             for (auto &specification: specifications) {
                 auto link = specification;
                 const auto source_index = resolve_port(link.source, PortRole::Source);
@@ -1146,7 +1146,7 @@ namespace Nott {
                 }
             }
 
-            // Toposort
+            /// Toposort
             std::vector<std::size_t> indegree(nodes.size(), 0);
             for (std::size_t ni = 0; ni < nodes.size(); ++ni)
                 for (auto t: nodes[ni].outputs) {
@@ -1163,7 +1163,7 @@ namespace Nott {
                 queue.pop_front();
                 ++visited;
                 if (nodes[node_index].kind != CompiledNode::Kind::Input) {
-                    // changed
+                    /// changed
                     CompiledStep step{};
                     step.node_index = node_index;
                     step.dependencies = nodes[node_index].inputs;
@@ -1178,7 +1178,7 @@ namespace Nott {
             if (visited != nodes.size())
                 throw std::invalid_argument("Link specification contains cycles; unable to compile routing graph.");
 
-            // Emit execution steps
+            /// Emit execution steps
             std::vector<ExecutionStep> execution_steps;
             execution_steps.reserve(steps.size());
             for (const auto &step: steps) {
@@ -1228,7 +1228,7 @@ namespace Nott {
                 execution_steps.push_back(std::move(execution));
             }
 
-            // Decide final terminal: if multiple distinct Output nodes referenced, auto-stack to keep single terminal
+            /// Decide final terminal: if multiple distinct Output nodes referenced, auto-stack to keep single terminal
             std::vector<std::size_t> referenced_outputs;
             for (std::size_t k = 0; k < output_node_indices.size(); ++k)
                 if (output_node_indices[k] != std::numeric_limits<std::size_t>::max()) referenced_outputs.push_back(
@@ -1238,7 +1238,7 @@ namespace Nott {
             if (referenced_outputs.size() == 1) {
                 output_node_index = referenced_outputs.front();
             } else if (referenced_outputs.size() > 1) {
-                // hidden stack join on dim=1
+                /// hidden stack join on dim=1
                 JoinBuffer buf{};
                 buf.policy = MergePolicy::Stack;
                 buf.concat_dimension = static_cast<int64_t>(1);
@@ -1268,7 +1268,7 @@ namespace Nott {
                 output_node_index = out_idx;
 
                 {
-                    // Join exec
+                    /// Join exec
                     ExecutionStep exJ{};
                     exJ.activation_index = join_idx;
                     exJ.kind = ExecutionStep::Kind::Join;
@@ -1277,7 +1277,7 @@ namespace Nott {
                     exJ.join.workspace_index = buf_idx;
                     exJ.join.concat_dimension = static_cast<int64_t>(1);
                     execution_steps.push_back(std::move(exJ));
-                    // Output exec
+                    /// Output exec
                     ExecutionStep exO{};
                     exO.activation_index = out_idx;
                     exO.kind = ExecutionStep::Kind::Output;
@@ -2040,7 +2040,7 @@ namespace Nott {
 #endif
             }
             if (!workspace.output.defined()) {
-                // Fallback: no Output execution step ran; pull directly from the node buffer.
+                /// Fallback: no Output execution step ran; pull directly from the node buffer.
 #ifndef NDEBUG
                 assert(output_index < workspace.node_buffers.size());
 #endif
@@ -2395,7 +2395,7 @@ namespace Nott {
                 options);
         }
 
-        //TODO: do it cleaner
+        /// TODO: do it cleaner
         auto evaluate(torch::Tensor evaluation_inputs, torch::Tensor evaluation_targets,
                       Evaluation::MultiClassificationDescriptor descriptor,
                       std::vector<Metric::Classification::Descriptor> metrics,
@@ -2607,7 +2607,7 @@ namespace Nott {
                 *test_dataset = TrainingDetails::ensure_cpu(std::move(*test_dataset), effective_options.memory_format);
             }
 
-            /* -- Resolve graph mode once before the loop -- */
+            /// Resolve graph mode once before the loop
             const auto req_graph_mode   = effective_options.graph_mode;
             const bool graph_active     = graph_execution_enabled(req_graph_mode, GraphExecutionPhase::Training);
             const GraphMode eff_graph   = graph_active ? req_graph_mode : GraphMode::Disabled;
@@ -2620,7 +2620,7 @@ namespace Nott {
             if (graph_enabled)
                 ensure_optimizer_graph_capability(eff_graph);
 
-            /* -- Build training policy -- */
+            /// Build training policy
             Training::TrainingPolicy policy = Training::make_training_policy(
                 effective_options,
                 device_.is_cuda(),
@@ -2630,7 +2630,7 @@ namespace Nott {
                 channels_last_applicable,
                 eff_graph);
 
-            /* -- CUDA prefetch state -- */
+            /// CUDA prefetch state
 #ifdef TORCH_CUDA_AVAILABLE
             std::optional<Training::PrefetchState> prefetch_state_opt;
             if (device_.is_cuda())
@@ -2642,10 +2642,10 @@ namespace Nott {
             const bool regularization_active = has_regularization();
             const bool amp_enabled           = is_amp_training_active();
 
-            /* -- Graph coordinator (persists across all epochs) -- */
+            /// Graph coordinator (persists across all epochs)
             Training::GraphModeCoordinator graph_coord{eff_graph};
 
-            /* -- Per-batch training step -- */
+            /// Per-batch training step
             auto training_step = [this, &graph_coord, graph_enabled,
                                    regularization_active, amp_enabled, &policy]
                 (Model& m, torch::Tensor inputs, torch::Tensor targets) -> torch::Tensor
@@ -2669,7 +2669,7 @@ namespace Nott {
                         graph_coord.requested, regularization_active, amp_enabled);
                 }
 
-                /* Capture path — may need one retry on shape change */
+                /// Capture path, may need one retry on shape change.
                 bool retry_done = false;
                 while (true) {
                     const GraphMode batch_mode = graph_coord.resolve(m, inputs, targets);
@@ -2692,7 +2692,7 @@ namespace Nott {
                 }
             };
 
-            /* -- Epoch-end callback: telemetry + console -- */
+            /// Epoch-end callback: telemetry + console
             auto on_epoch_end = [&](const Training::EpochLogEntry& entry) {
                 auto lrs = collect_learning_rates();
 
@@ -2733,7 +2733,7 @@ namespace Nott {
                 }
             };
 
-            /* -- Test-loss callback -- */
+            /// Test-loss callback
             auto compute_test_loss_fn = [&](auto& m, const auto& ds,
                                             const Training::TrainingPolicy& pol)
                 -> std::optional<double>
@@ -3140,7 +3140,7 @@ namespace Nott {
             }
 
             if (policy == WorkspaceTensorPolicy::RebindStorage) {
-                // Rebind the destination handle to share the source's storage
+                /// Rebind the destination handle to share the source's storage
                 destination = source;
                 return;
             }

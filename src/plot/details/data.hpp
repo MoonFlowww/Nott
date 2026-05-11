@@ -280,7 +280,7 @@ namespace Nott::Plot::Data {
             if (!xtrain.defined()) throw std::invalid_argument("Timeserie xtrain must be defined");
             xtrain = Details::as_cpu_contiguous(xtrain).to(torch::kFloat32);
 
-            // Concatenate if xtest exists
+            /// Concatenate if xtest exists
             std::size_t train_len = static_cast<std::size_t>(xtrain.size(0));
             if (xtest && xtest->defined()) {
                 auto test_cpu = Details::as_cpu_contiguous(*xtest).to(torch::kFloat32);
@@ -290,7 +290,7 @@ namespace Nott::Plot::Data {
                 m_testSeparator = static_cast<double>(train_len);
             }
 
-            // Extract series (1D or 2D)
+            /// Extract series (1D or 2D)
             if (xtrain.dim() == 1) {
                 auto acc = xtrain.accessor<float, 1>();
                 m_series.resize(1);
@@ -311,13 +311,13 @@ namespace Nott::Plot::Data {
                 throw std::invalid_argument("Timeserie expects 1D or 2D tensor");
             }
 
-            // Build X-axis
+            /// Build X-axis
             const auto total_len = m_series.empty() ? 0 : m_series.front().size();
             m_xAxis.resize(total_len);
             for (std::size_t i = 0; i < total_len; ++i)
                 m_xAxis[i] = static_cast<double>(i);
 
-            // Assign colors
+            /// Assign colors
             auto palette = Details::build_color_palette();
             m_colors.reserve(m_series.size());
             for (std::size_t idx = 0; idx < m_series.size(); ++idx)

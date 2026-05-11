@@ -1,6 +1,6 @@
 #ifndef Nott_BATCHNORM_HPP
 #define Nott_BATCHNORM_HPP
-//https://arxiv.org/pdf/1502.03167
+/// https://arxiv.org/pdf/1502.03167
 #include <cstdint>
 
 #include <stdexcept>

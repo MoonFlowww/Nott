@@ -6,7 +6,7 @@
  *
  * Lives at run_epochs() scope.  One instance per training run.
  * Tracks whether the graph has been captured for the current batch shape
- * and coordinates the Capture → Pending → Ready → Replay transitions.
+ * and coordinates the Capture -> Pending -> Ready -> Replay transitions.
  */
 
 #include <cstdint>
@@ -24,7 +24,7 @@ struct GraphModeCoordinator {
     Status    status = Status::NeverCaptured;
 
 private:
-    // Lightweight batch-shape descriptor — avoids pulling in Model::BatchSignature.
+    /// Lightweight batch-shape descriptor, avoids pulling in Model::BatchSignature.
     struct TensorDesc {
         torch::Device              device{torch::kCPU};
         torch::ScalarType          dtype{torch::kFloat32};

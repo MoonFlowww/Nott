@@ -1,6 +1,6 @@
 #ifndef Nott_ADAFACTOR_HPP
 #define Nott_ADAFACTOR_HPP
-// "Adafactor: Adaptive Learning Rates with Sublinear Memory Cost" https://arxiv.org/pdf/1804.04235
+/// "Adafactor: Adaptive Learning Rates with Sublinear Memory Cost" https://arxiv.org/pdf/1804.04235
 #include <algorithm>
 #include <cmath>
 #include <cstdint>

@@ -1,6 +1,6 @@
 #ifndef Nott_GLU_HPP
 #define Nott_GLU_HPP
-// "Language Modeling with Gated Convolutional Networks" (GLU activation) https://arxiv.org/pdf/1612.08083
+/// "Language Modeling with Gated Convolutional Networks" (GLU activation) https://arxiv.org/pdf/1612.08083
 
 #include <torch/torch.h>
 

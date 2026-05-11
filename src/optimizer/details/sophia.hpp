@@ -1,7 +1,7 @@
 #ifndef Nott_SOPHIA_HPP
 #define Nott_SOPHIA_HPP
-// Sophia G and H
-//https://arxiv.org/pdf/2305.14342
+/// Sophia G and H
+/// https://arxiv.org/pdf/2305.14342
 #include <algorithm>
 #include <cmath>
 #include <cstdint>

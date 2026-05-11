@@ -1,6 +1,6 @@
 #ifndef Nott_REGULARIZATION_DETAILS_VAT_HPP
 #define Nott_REGULARIZATION_DETAILS_VAT_HPP
-// "Virtual Adversarial Training: A Regularization Method for Supervised and Semi-supervised Learning" https://arxiv.org/pdf/1704.03976
+/// "Virtual Adversarial Training: A Regularization Method for Supervised and Semi-supervised Learning" https://arxiv.org/pdf/1704.03976
 #include <torch/torch.h>
 
 #include "common.hpp"

@@ -122,13 +122,13 @@ namespace Nott::Utils {
             return pipe_ != nullptr;
         }
 
-        // Set printf-style numeric format for an axis (e.g. "%.3f")
+        /// Set printf-style numeric format for an axis (e.g. "%.3f")
         void setFormat(char axis, const std::string& fmt) {
             command(std::string("set format ") + axis + " '" + EscapeSingleQuotes(fmt) + "'");
         }
 
-        // Main scaler: applies Linear, Log, LogOneMinus, or Logit to axis ('x'|'y'|'z')
-        // For LogOneMinus, 'base' controls the logarithm base (default 10).
+        /// Main scaler: applies Linear, Log, LogOneMinus, or Logit to axis ('x'|'y'|'z')
+        /// For LogOneMinus, 'base' controls the logarithm base (default 10).
         void setAxisScale(char axis, AxisScale scale, double base = 10.0) {
             switch (scale) {
                 case AxisScale::Linear:
@@ -143,8 +143,8 @@ namespace Nott::Utils {
                 }
 
                 case AxisScale::LogOneMinus: {
-                    // y' = -log_b(1 - y)  <=>  via (-log(1-ax)/log(base))
-                    // inverse: y = 1 - exp(-y'*log(base))
+                    /// y' = -log_b(1 - y)  <=>  via (-log(1-ax)/log(base))
+                    /// inverse: y = 1 - exp(-y'*log(base))
                     unsetLogScale(axis);
                     const std::string ax(1, axis);
                     std::ostringstream fwd, inv;
@@ -155,7 +155,7 @@ namespace Nott::Utils {
                 }
 
                 case AxisScale::Logit: {
-                    // y' = log(y/(1-y)), inverse: y = 1/(1+exp(-y'))
+                    /// y' = log(y/(1-y)), inverse: y = 1/(1+exp(-y'))
                     unsetLogScale(axis);
                     const std::string ax(1, axis);
                     const std::string fwd = "(log(" + ax + "/(1.0-" + ax + ")))";
@@ -166,15 +166,15 @@ namespace Nott::Utils {
             }
         }
 
-        // Convenience
+        /// Convenience
         void setAxisScaleX(AxisScale s, double base = 10.0) { setAxisScale('x', s, base); }
         void setAxisScaleY(AxisScale s, double base = 10.0) { setAxisScale('y', s, base); }
         void setAxisScaleZ(AxisScale s, double base = 10.0) { setAxisScale('z', s, base); }
 
-        // Tick helpers in DATA units (gnuplot maps them through the nonlinear transform)
+        /// Tick helpers in DATA units (gnuplot maps them through the nonlinear transform)
         void unsetTics(char axis) { command(std::string("unset ") + axis + "tics"); }
 
-        // Set ticks at given data values with default text = formatted value (fmt like "%.3f")
+        /// Set ticks at given data values with default text = formatted value (fmt like "%.3f")
         void setTics(char axis, const std::vector<double>& values, const std::string& fmt = "%.3f") {
             std::ostringstream s; s << "set " << axis << "tics (";
             char buf[128]; bool first = true;
@@ -188,7 +188,7 @@ namespace Nott::Utils {
             command(s.str());
         }
 
-        // Labeled ticks explicitly
+        /// Labeled ticks explicitly
         void setLabeledTics(char axis, const std::vector<std::pair<double,std::string>>& tics) {
             std::ostringstream s; s << "set " << axis << "tics (";
             for (std::size_t i = 0; i < tics.size(); ++i) {
@@ -324,7 +324,7 @@ namespace Nott::Utils {
         void setMouse(bool enable = true) {
             command(std::string(enable ? "set" : "unset") + " mouse");
             if (enable) {
-                // Optional keybindings for smoother UX
+                /// Optional keybindings for smoother UX
                 command("bind all 'r' 'refresh'");
                 command("bind all 'BackSpace' 'reset'");
             }
@@ -517,7 +517,7 @@ namespace Nott::Utils {
             const char* sessionType = std::getenv("XDG_SESSION_TYPE");
             const bool isWayland = (sessionType && std::string_view(sessionType) == "wayland");
 
-            // Force fallback to XWayland if running under Wayland — fixes gnuplot-qt scaling bugs
+            /// Force fallback to XWayland if running under Wayland, fixes gnuplot-qt scaling bugs.
             if (isWayland) {
                 const char* qpaPlatform = std::getenv("QT_QPA_PLATFORM");
                 if (qpaPlatform == nullptr || std::string_view(qpaPlatform) != "xcb") {
@@ -529,7 +529,7 @@ namespace Nott::Utils {
                 }
             }
 
-            // Standard Qt DPI scaling variables
+            /// Standard Qt DPI scaling variables
             const char* autoScale = std::getenv("QT_AUTO_SCREEN_SCALE_FACTOR");
             if (autoScale == nullptr) {
 #ifdef _WIN32

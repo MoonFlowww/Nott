@@ -35,33 +35,33 @@ namespace Nott::Optimizer::Details {
         return torch_options;
     }
 
-    // Thin wrapper around torch::optim::SGD so the factory can be tiny.
-    // Provides explicit overloads for vector<at::Tensor> and param_groups and a
-    // guarded forwarding ctor so templated factories will resolve correctly.
+    /// Thin wrapper around torch::optim::SGD so the factory can be tiny.
+    /// Provides explicit overloads for vector<at::Tensor> and param_groups and a
+    /// guarded forwarding ctor so templated factories will resolve correctly.
     class SGD : public torch::optim::SGD {
     public:
-        // ctor for simple param list (vector<at::Tensor>)
+        /// ctor for simple param list (vector<at::Tensor>)
         SGD(std::vector<at::Tensor> params,
             const torch::optim::SGDOptions& options,
             std::vector<std::vector<at::Tensor>> warmup_buckets = {})
             : torch::optim::SGD(std::move(params), options),
               warmup_buckets_(std::move(warmup_buckets)) {}
 
-        // ctor for param groups (const lvalue ref)
+        /// ctor for param groups (const lvalue ref)
         SGD(const std::vector<torch::optim::OptimizerParamGroup>& param_groups,
             const torch::optim::SGDOptions& options,
             std::vector<std::vector<at::Tensor>> warmup_buckets = {})
             : torch::optim::SGD(param_groups, options),
               warmup_buckets_(std::move(warmup_buckets)) {}
 
-        // ctor for param groups (rvalue)
+        /// ctor for param groups (rvalue)
         SGD(std::vector<torch::optim::OptimizerParamGroup>&& param_groups,
             const torch::optim::SGDOptions& options,
             std::vector<std::vector<at::Tensor>> warmup_buckets = {})
             : torch::optim::SGD(std::move(param_groups), options),
               warmup_buckets_(std::move(warmup_buckets)) {}
 
-        // Guarded forwarding ctor: participates only if torch::optim::SGD is constructible
+        /// Guarded forwarding ctor: participates only if torch::optim::SGD is constructible
         template <typename ParamsT,
                   typename = std::enable_if_t<std::is_constructible_v<torch::optim::SGD, ParamsT, torch::optim::SGDOptions>>>
         SGD(ParamsT&& params,
@@ -70,9 +70,9 @@ namespace Nott::Optimizer::Details {
             : torch::optim::SGD(std::forward<ParamsT>(params), options),
               warmup_buckets_(std::move(warmup_buckets)) {}
 
-        // Initialize momentum buffers (safe to call repeatedly)
+        /// Initialize momentum buffers (safe to call repeatedly)
         void ensure_state_initialized() {
-            // quick check: if no param uses momentum, nothing to do
+            /// quick check: if no param uses momentum, nothing to do
             const bool momentum_enabled = std::any_of(
                 this->param_groups().begin(),
                 this->param_groups().end(),
@@ -81,7 +81,7 @@ namespace Nott::Optimizer::Details {
                 });
             if (!momentum_enabled) return;
 
-            // build buckets (use provided warmup buckets if present)
+            /// build buckets (use provided warmup buckets if present)
             std::vector<std::vector<at::Tensor>> buckets = warmup_buckets_;
             if (buckets.empty()) {
                 for (const auto& group : this->param_groups()) {
@@ -113,10 +113,10 @@ namespace Nott::Optimizer::Details {
                             state.momentum_buffer(torch::zeros_like(param, torch::MemoryFormat::Preserve));
                         } else if (state.momentum_buffer().device() != param.device() ||
                                    state.momentum_buffer().sizes() != param.sizes()) {
-                            // be defensive: ensure buffer is on same device / compatible shape
+                            /// be defensive: ensure buffer is on same device / compatible shape
                             state.momentum_buffer(state.momentum_buffer().to(param.options()));
                             if (state.momentum_buffer().sizes() != param.sizes()) {
-                                // replace with zeros_like if shapes don't match (rare)
+                                /// replace with zeros_like if shapes don't match (rare)
                                 state.momentum_buffer(torch::zeros_like(param, torch::MemoryFormat::Preserve));
                             }
                         }

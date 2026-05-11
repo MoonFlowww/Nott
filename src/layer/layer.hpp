@@ -1,6 +1,6 @@
 #ifndef Nott_LAYER_HPP
 #define Nott_LAYER_HPP
-// This file is a factory, must exempt it from any logical-code. For functions look into "/details"
+/// This file is a factory, must exempt it from any logical-code. For functions look into "/details"
 #include <variant>
 #include <vector>
 #include <utility>
@@ -76,7 +76,7 @@ namespace Nott::Layer {
     using S4Options = Details::S4Options;
     using S4Descriptor = Details::S4Descriptor;
 
-    //NB: this is a layer
+    /// NB: this is a layer
     using ReduceOp = Details::ReduceOp;
     using ReduceOptions = Details::ReduceOptions;
     using ReduceDescriptor = Details::ReduceDescriptor;

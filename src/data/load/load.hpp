@@ -65,7 +65,7 @@ namespace Nott::Data::Load {
                 char c = line[i];
 
                 if (c == '"') {
-                    // handle escaped double quotes ("")
+                    /// handle escaped double quotes ("")
                     if (in_quote && i + 1 < line.size() && line[i + 1] == '"') {
                         cur.push_back('"');
                         ++i; // skip the escaped quote
@@ -84,7 +84,7 @@ namespace Nott::Data::Load {
                 cur.push_back(c);
             }
 
-            // push last token
+            /// push last token
             tokens.emplace_back(trim_copy(cur));
             return tokens;
         }
@@ -116,8 +116,8 @@ namespace Nott::Data::Load {
                                                                 const std::filesystem::path& preferred_records_dir,
                                                                 const std::string& relative_field)
         {
-            // relative_field is typically like "records500/21000/21837_hr" or "records100/00000/00001_lr"
-            // We must return the *base* path without extension so that ".hea"/".dat" can be appended.
+            /// relative_field is typically like "records500/21000/21837_hr" or "records100/00000/00001_lr"
+            /// We must return the *base* path without extension so that ".hea"/".dat" can be appended.
             auto trimmed = trim_copy(relative_field);
             if (trimmed.empty()) {
                 return {};
@@ -136,7 +136,7 @@ namespace Nott::Data::Load {
 
             std::filesystem::path candidate(trimmed);
 
-            // Normalize known directory aliases (e.g., '100' -> 'records100')
+            /// Normalize known directory aliases (e.g., '100' -> 'records100')
             auto normalize_dir_alias = [](const std::filesystem::path& p)->std::filesystem::path {
                 auto parts = p;
                 std::vector<std::string> items;
@@ -150,22 +150,22 @@ namespace Nott::Data::Load {
             };
             candidate = normalize_dir_alias(candidate);
 
-            // If it's relative, first try root/<relative_field>
+            /// If it's relative, first try root/<relative_field>
             if (candidate.is_relative()) {
                 std::filesystem::path try1 = ensure_base(root / candidate);
                 if (base_exists(try1)) {
                     return try1;
                 }
 
-                // If user passed only the filename part (e.g., "00001_lr"), prepend preferred_records_dir
+                /// If user passed only the filename part (e.g., "00001_lr"), prepend preferred_records_dir
                 std::filesystem::path try2 = ensure_base(root / preferred_records_dir.filename() / candidate);
                 if (base_exists(try2)) {
                     return try2;
                 }
 
-                // If still missing the subfolder layer (e.g., "records100/00001_lr"), infer directory from numeric prefix
+                /// If still missing the subfolder layer (e.g., "records100/00001_lr"), infer directory from numeric prefix
                 const auto stem = candidate.stem().string(); // e.g., "00001_lr"
-                // extract leading integer
+                /// extract leading integer
                 std::size_t pos = 0;
                 while (pos < stem.size() && std::isdigit(static_cast<unsigned char>(stem[pos]))) { ++pos; }
                 std::filesystem::path try3;
@@ -180,11 +180,11 @@ namespace Nott::Data::Load {
                             return try3;
                         }
                     } catch (...) {
-                        // swallow and fall through to directory scan
+                        /// swallow and fall through to directory scan
                     }
                 }
 
-                // Last resort: scan immediate subdirs of preferred_records_dir for matching stem
+                /// Last resort: scan immediate subdirs of preferred_records_dir for matching stem
                 try {
                     const auto base_dir = root / preferred_records_dir.filename();
                     if (std::filesystem::exists(base_dir) && std::filesystem::is_directory(base_dir)) {
@@ -197,16 +197,16 @@ namespace Nott::Data::Load {
                         }
                     }
                 } catch (...) {
-                    // ignore errors from directory iteration and fall through
+                    /// ignore errors from directory iteration and fall through
                 }
 
-                // As a final fallback, return the normalized guess under root/<relative_field> without extension
+                /// As a final fallback, return the normalized guess under root/<relative_field> without extension
                 return ensure_base(root / candidate);
             } else {
-                // Absolute path given. Just normalize and strip extension.
+                /// Absolute path given. Just normalize and strip extension.
                 std::filesystem::path abs = ensure_base(candidate);
                 if (base_exists(abs)) return abs;
-                // Also try relative to root to be forgiving
+                /// Also try relative to root to be forgiving
                 std::filesystem::path alt = ensure_base(root / candidate.relative_path());
                 return base_exists(alt) ? alt : abs;
             }
@@ -219,7 +219,7 @@ namespace Nott::Data::Load {
             const auto trimmed = trim_copy(token);
             if (trimmed.empty()) return std::nullopt;
 
-            // fast, locale-independent parsing
+            /// fast, locale-independent parsing
             double value{};
             auto first = trimmed.data();
             auto last = trimmed.data() + trimmed.size();
@@ -229,7 +229,7 @@ namespace Nott::Data::Load {
                 return value;
             }
 
-            // fallback to stod if from_chars didn't parse (some implementations had partial double support)
+            /// fallback to stod if from_chars didn't parse (some implementations had partial double support)
             try {
                 std::size_t processed = 0;
                 const double v = std::stod(trimmed, &processed);
@@ -902,7 +902,7 @@ namespace Nott::Data::Load {
                             } else if (needs_upscale && !needs_downscale) {
                                 working = Nott::Data::Transform::Format::Upsample(working, options);
                             } else if (needs_downscale) {
-                                // Mixed dimensions larger/smaller: treat as downscale to avoid overshooting.
+                                /// Mixed dimensions larger/smaller: treat as downscale to avoid overshooting.
                                 working = Nott::Data::Transform::Format::Downsample(working, options);
                             } else if (needs_upscale) {
                                 working = Nott::Data::Transform::Format::Upsample(working, options);
@@ -938,7 +938,7 @@ namespace Nott::Data::Load {
             const auto header_tokens = split_csv_line(header_line);
             const auto indices = header_index_map(header_tokens);
 
-            // Column names vary across mirrors; prefer 'scp_code', fall back to 'statement' or 'code'. Avoid 'description'.
+            /// Column names vary across mirrors; prefer 'scp_code', fall back to 'statement' or 'code'. Avoid 'description'.
             auto code_it = indices.find("scp_code");
             if (code_it == indices.end()) code_it = indices.find("statement");
             if (code_it == indices.end()) code_it = indices.find("code");
@@ -965,7 +965,7 @@ namespace Nott::Data::Load {
                 auto diagnostic_class = trim_copy(fields[diagnostic_class_it->second]);
 
                 if (diagnostic_flag != "1" || scp_code.empty()) continue;
-                // Only keep superclasses we model
+                /// Only keep superclasses we model
                 if (allowed_classes.find(diagnostic_class) == allowed_classes.end()) continue;
 
                 scp_to_superclass[scp_code] = diagnostic_class;
@@ -982,7 +982,7 @@ namespace Nott::Data::Load {
             static const std::regex code_weight_regex(R"((["'])([^"']+)\1\s*:\s*([0-9]*\.?[0-9]+))");
             std::unordered_map<std::string, float> superclass_votes;
 
-            // Fallback heuristic: infer superclass from common PTB-XL code patterns when mapping is missing.
+            /// Fallback heuristic: infer superclass from common PTB-XL code patterns when mapping is missing.
             auto infer_superclass = [](const std::string& raw)->std::string {
                 std::string s; s.reserve(raw.size());
                 for (char c : raw) s.push_back(std::toupper(static_cast<unsigned char>(c)));
@@ -991,27 +991,27 @@ namespace Nott::Data::Load {
 
                 if (s == "NORM" || s == "NORMAL") return "NORM";
 
-                // Myocardial infarction
+                /// Myocardial infarction
                 if (s == "MI" || contains("INFAR") || contains("MI")) return "MI";
 
-                // ST/T changes
+                /// ST/T changes
                 if (s == "STTC" || starts_with("ST") || contains("STD") || contains("STE") || contains("NST")
                     || contains("TINV") || contains("TWA"))
                     return "STTC";
 
-                // Conduction disturbances
+                /// Conduction disturbances
                 if (contains("BBB") || contains("AVB") || s == "LAFB" || s == "LAHB" || s == "LPFB"
                     || s == "IVCD" || s == "WPW" || contains("BIFASC") || contains("TRIFASC"))
                     return "CD";
 
-                // Hypertrophy
+                /// Hypertrophy
                 if (s == "HYP" || contains("LVH") || contains("RVH"))
                     return "HYP";
 
                 return "";
             };
 
-            // First pass: parse explicit weights from scp_codes
+            /// First pass: parse explicit weights from scp_codes
             bool any_match = false;
             for (std::sregex_iterator match(scp_codes_field.begin(), scp_codes_field.end(), code_weight_regex);
                  match != std::sregex_iterator();
@@ -1020,7 +1020,7 @@ namespace Nott::Data::Load {
                 const auto scp_code_raw = (*match)[2].str();
                 const auto weight_token = (*match)[3].str();
 
-                // Try mapping via scp_statements, fallback to heuristic
+                /// Try mapping via scp_statements, fallback to heuristic
                 auto it = scp_to_superclass.find(scp_code_raw);
                 if (it == scp_to_superclass.end()) {
                     std::string up = scp_code_raw; for (auto &c : up) c = std::toupper(static_cast<unsigned char>(c));
@@ -1035,15 +1035,15 @@ namespace Nott::Data::Load {
                 } catch (...) {
                     w = 0.f;
                 }
-                // Treat zero/unknown as presence vote to avoid dropping rows
+                /// Treat zero/unknown as presence vote to avoid dropping rows
                 if (!(w > 0.f)) w = 1.0f;
 
                 superclass_votes[superclass] += w;
                  }
 
-            // If regex failed entirely (e.g., different formatting), try a ultra-simple fallback:
+            /// If regex failed entirely (e.g., different formatting), try a ultra-simple fallback:
             if (!any_match) {
-                // Look for quoted tokens (keys) without requiring weights
+                /// Look for quoted tokens (keys) without requiring weights
                 static const std::regex key_only(R"((["'])([^"']+)\1)");
                 for (std::sregex_iterator m(scp_codes_field.begin(), scp_codes_field.end(), key_only);
                      m != std::sregex_iterator(); ++m) {
@@ -1877,7 +1877,7 @@ namespace Nott::Data::Load {
                 multi = torch::zeros({(long)class_order.size()}, torch::TensorOptions().dtype(torch::kFloat32));
                 int pos_count = 0;
                 for (const auto& kv : votes) {
-                    // kv.first is superclass string, kv.second is vote weight
+                    /// kv.first is superclass string, kv.second is vote weight
                     auto itc = class_to_index.find(kv.first);
                     if (itc == class_to_index.end()) continue;
                     if (kv.second > multilabel_threshold) {
@@ -1886,7 +1886,7 @@ namespace Nott::Data::Load {
                     }
                 }
                 if (pos_count == 0) {
-                    // If nothing passed threshold but we do have votes, take the argmax to avoid dropping the sample
+                    /// If nothing passed threshold but we do have votes, take the argmax to avoid dropping the sample
                     if (!votes.empty()) {
                         auto best = std::max_element(votes.begin(), votes.end(),
                                                      [](auto& a, auto& b){ return a.second < b.second; });
@@ -1930,7 +1930,7 @@ namespace Nott::Data::Load {
             throw std::runtime_error(oss.str());
         }
 
-        // Stack -> shuffle -> split (ignore folds completely)
+        /// Stack -> shuffle -> split (ignore folds completely)
         auto inputs  = torch::stack(all_signals);
         torch::Tensor targets;
         if (multilabel) {

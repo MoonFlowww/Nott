@@ -1,7 +1,7 @@
 #ifndef Nott_PERCEIVER_HPP
 #define Nott_PERCEIVER_HPP
-// "Perceiver: General Perception with Iterative Attention" https://arxiv.org/pdf/2103.03206
-// Hybrid architecture attending from a small latent array to high-dimensional inputs via cross and latent self-attention.
+/// "Perceiver: General Perception with Iterative Attention" https://arxiv.org/pdf/2103.03206
+/// Hybrid architecture attending from a small latent array to high-dimensional inputs via cross and latent self-attention.
 
 #include <algorithm>
 #include <cstddef>

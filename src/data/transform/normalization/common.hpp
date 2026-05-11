@@ -81,7 +81,7 @@ namespace Nott::Data::Transform::Normalization::Details {
 
     inline at::Tensor safe_probit(const at::Tensor& u, double eps=1e-6) {
         auto v = u.clamp(eps, 1.0 - eps);
-        // Φ^{-1}(u) = sqrt(2) * erfinv(2u-1)
+        /// probit(u) = sqrt(2) * erfinv(2u-1)
         return std::sqrt(2.0) * at::erfinv(2.0 * v - 1.0);
     }
 }

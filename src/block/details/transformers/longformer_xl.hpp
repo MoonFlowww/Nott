@@ -1,8 +1,8 @@
 #ifndef Nott_LONGFORMER_XL_HPP
 #define Nott_LONGFORMER_XL_HPP
-// "Longformer: The Long-Document Transformer" — Beltagy https://arxiv.org/pdf/2004.05150
-// and "Transformer-XL: Attentive Language Models Beyond a Fixed-Length Context" https://arxiv.org/pdf/1901.02860
-// Sliding-window self-attention with optional segment-level recurrence for long-context sequence modeling.
+/// "Longformer: The Long-Document Transformer", Beltagy (arXiv:2004.05150).
+/// and "Transformer-XL: Attentive Language Models Beyond a Fixed-Length Context" https://arxiv.org/pdf/1901.02860
+/// Sliding-window self-attention with optional segment-level recurrence for long-context sequence modeling.
 
 #include <algorithm>
 #include <cstddef>

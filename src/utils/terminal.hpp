@@ -8,11 +8,11 @@
 #include <vector>
 
 namespace Nott::Utils::Terminal {
-    // ---------- Colors ----------
+    /// ---------- Colors ----------
     namespace Colors {
         inline constexpr std::string_view kReset = "\033[0m";
 
-        // 8/16-color foregrounds
+        /// 8/16-color foregrounds
         inline constexpr std::string_view kBlack         = "\033[30m";
         inline constexpr std::string_view kRed           = "\033[31m";
         inline constexpr std::string_view kGreen         = "\033[32m";
@@ -31,7 +31,7 @@ namespace Nott::Utils::Terminal {
         inline constexpr std::string_view kBrightCyan    = "\033[96m";
         inline constexpr std::string_view kBrightWhite   = "\033[97m";
 
-        // Named 256-color convenience
+        /// Named 256-color convenience
         inline constexpr std::string_view kTurquoise    = "\033[38;5;49m";
         inline constexpr std::string_view kCrimson      = "\033[38;5;196m";
         inline constexpr std::string_view kAzure        = "\033[38;5;33m";
@@ -43,7 +43,7 @@ namespace Nott::Utils::Terminal {
     }
 
     namespace BgColors {
-        // 8/16-color backgrounds
+        /// 8/16-color backgrounds
         inline constexpr std::string_view kBlack         = "\033[40m";
         inline constexpr std::string_view kRed           = "\033[41m";
         inline constexpr std::string_view kGreen         = "\033[42m";
@@ -63,7 +63,7 @@ namespace Nott::Utils::Terminal {
         inline constexpr std::string_view kBrightWhite   = "\033[107m";
     }
 
-    // ---------- Text attributes ----------
+    /// ---------- Text attributes ----------
     namespace Styles {
         inline constexpr std::string_view kBold        = "\033[1m";
         inline constexpr std::string_view kDim         = "\033[2m";
@@ -83,7 +83,7 @@ namespace Nott::Utils::Terminal {
         inline constexpr std::string_view kNoStrike    = "\033[29m";
     }
 
-    // ---------- Symbols ----------
+    /// ---------- Symbols ----------
     namespace Symbols {
         inline constexpr std::string_view kArrowUp   = "▲";
         inline constexpr std::string_view kArrowDown = "▼";
@@ -94,7 +94,7 @@ namespace Nott::Utils::Terminal {
         inline constexpr std::string_view kWarn      = "⚠";
         inline constexpr std::string_view kClock     = "⏱";
 
-        // Heavy box drawing
+        /// Heavy box drawing
         inline constexpr std::string_view kBoxTopLeft         = "┏";
         inline constexpr std::string_view kBoxTopSeparator    = "┳";
         inline constexpr std::string_view kBoxTopRight        = "┓";
@@ -107,14 +107,14 @@ namespace Nott::Utils::Terminal {
         inline constexpr std::string_view kBoxHorizontal      = "━";
         inline constexpr std::string_view kBoxVertical        = "┃";
 
-        // Rounded corners (use heavy horizontals)
+        /// Rounded corners (use heavy horizontals)
         inline constexpr std::string_view kRoundedTopLeft     = "╭";
         inline constexpr std::string_view kRoundedTopRight    = "╮";
         inline constexpr std::string_view kRoundedBottomLeft  = "╰";
         inline constexpr std::string_view kRoundedBottomRight = "╯";
     }
 
-    // ---------- Control / Cursor ----------
+    /// ---------- Control / Cursor ----------
     namespace Control {
         inline constexpr std::string_view kEraseToLineEnd   = "\033[K";
         inline constexpr std::string_view kEraseToLineStart = "\033[1K";
@@ -131,7 +131,7 @@ namespace Nott::Utils::Terminal {
         inline constexpr std::string_view kShowCursor    = "\033[?25h";
     }
 
-    // Parametric cursor movement
+    /// Parametric cursor movement
     inline std::string CursorUp(std::size_t n = 1)    { return "\033[" + std::to_string(n) + "A"; }
     inline std::string CursorDown(std::size_t n = 1)  { return "\033[" + std::to_string(n) + "B"; }
     inline std::string CursorRight(std::size_t n = 1) { return "\033[" + std::to_string(n) + "C"; }
@@ -140,7 +140,7 @@ namespace Nott::Utils::Terminal {
         return "\033[" + std::to_string(row1) + ";" + std::to_string(col1) + "H";
     }
 
-    // ---------- Color builders ----------
+    /// ---------- Color builders ----------
     inline std::string Fg256(std::uint8_t idx) { return "\033[38;5;" + std::to_string(idx) + "m"; }
     inline std::string Bg256(std::uint8_t idx) { return "\033[48;5;" + std::to_string(idx) + "m"; }
     inline std::string FgRGB(std::uint8_t r, std::uint8_t g, std::uint8_t b) {
@@ -150,7 +150,7 @@ namespace Nott::Utils::Terminal {
         return "\033[48;2;" + std::to_string(r) + ";" + std::to_string(g) + ";" + std::to_string(b) + "m";
     }
 
-    // ---------- Small helpers ----------
+    /// ---------- Small helpers ----------
     inline std::string Repeat(std::string_view glyph, std::size_t count) {
         std::string s; s.reserve(glyph.size() * count);
         for (std::size_t i = 0; i < count; ++i) s.append(glyph);
@@ -162,12 +162,12 @@ namespace Nott::Utils::Terminal {
         return out;
     }
 
-    // ---------- Bars and separators ----------
+    /// ---------- Bars and separators ----------
     enum class FrameStyle { Rounded, Box };
 
-    // Top bars:
-    // 1) Rounded:  ╭━━━━…╮
-    // 2) Box:      ┏━━━━…┓
+    /// Top bars:
+    /// 1) Rounded:  ╭━━━━…╮
+    /// 2) Box:      ┏━━━━…┓
     inline std::string TopBar(std::size_t inner_len,
                               std::string_view color,
                               FrameStyle style) {
@@ -185,9 +185,9 @@ namespace Nott::Utils::Terminal {
         return TopBar(inner_len, color, FrameStyle::Box);
     }
 
-    // Horizontal separators for tables.
-    // spacings = widths of each segment between vertical junctions.
-    // kind: "top", "middle", or "bottom" row of a frame.
+    /// Horizontal separators for tables.
+    /// Spacings = widths of each segment between vertical junctions.
+    /// kind: "top", "middle", or "bottom" row of a frame.
     enum class HSepKind { Top, Middle, Bottom };
 
     inline std::string HSeparator(const std::vector<std::size_t>& spacings,
@@ -196,7 +196,7 @@ namespace Nott::Utils::Terminal {
                                   HSepKind kind) {
         using namespace Symbols;
 
-        // Heavy glyph set
+        /// Heavy glyph set
         std::string_view left;
         std::string_view midJunction;
         std::string_view right;
@@ -229,7 +229,7 @@ namespace Nott::Utils::Terminal {
         return ApplyColor(out, color);
     }
 
-    // Convenience builders for each kind
+    /// Convenience builders for each kind
     inline std::string HTop(const std::vector<std::size_t>& spacings,
                             std::string_view color,
                             FrameStyle style) {
@@ -245,12 +245,12 @@ namespace Nott::Utils::Terminal {
         return HSeparator(spacings, color, style, HSepKind::Bottom);
     }
 
-    // Pack lines as an array if you want to emit a header frame quickly.
-    // Example: BuildTopHeaderArray(12, Colors::kBrightYellow, FrameStyle::Rounded)
+    /// Pack lines as an array if you want to emit a header frame quickly.
+    /// Example: BuildTopHeaderArray(12, Colors::kBrightYellow, FrameStyle::Rounded)
     inline std::vector<std::string> BuildTopHeaderArray(std::size_t inner_len,
                                                         std::string_view color,
                                                         FrameStyle style) {
-        // Single-line array as requested, ready to print or concatenate.
+        /// Single-line array as requested, ready to print or concatenate.
         return { TopBar(inner_len, color, style) };
     }
 
@@ -279,18 +279,19 @@ namespace Nott::Utils::Terminal {
 }
 
 
-/* Instance:
-using namespace Nott::Utils::Terminal;
-
-// Top bars
-auto r = TopBarRounded(13, Colors::kBrightYellow); // ╭━━━━━━━━━━━━━╮
-auto b = TopBarBox(13, Colors::kBrightYellow);     // ┏━━━━━━━━━━━━━┓
-
-// Spacing vector [6, 4, 8]
-std::vector<std::size_t> spans{6,4,8};
-auto top = HTop(spans, Colors::kBrightGreen, FrameStyle::Box);   // ┏━━━━━━┳━━━━┳━━━━━━━━┓
-auto mid = HMid(spans, Colors::kBrightGreen);                    // ┣━━━━━━╋━━━━╋━━━━━━━━┫
-auto bot = HBottom(spans, Colors::kBrightGreen, FrameStyle::Box);// ┗━━━━━━┻━━━━┻━━━━━━━━┛
-
-*/
+/// Usage example:
+///
+/// @code
+/// using namespace Nott::Utils::Terminal;
+///
+/// // Top bars
+/// auto r = TopBarRounded(13, Colors::kBrightYellow);
+/// auto b = TopBarBox(13, Colors::kBrightYellow);
+///
+/// // Spacing vector [6, 4, 8]
+/// std::vector<std::size_t> spans{6,4,8};
+/// auto top = HTop(spans, Colors::kBrightGreen, FrameStyle::Box);
+/// auto mid = HMid(spans, Colors::kBrightGreen);
+/// auto bot = HBottom(spans, Colors::kBrightGreen, FrameStyle::Box);
+/// @endcode
 #endif // LIBNott_TERMINAL_HPP

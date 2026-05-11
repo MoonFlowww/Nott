@@ -1,6 +1,6 @@
 #ifndef Nott_ACTIVATION_HPP
 #define Nott_ACTIVATION_HPP
-// This file is a factory, must exempt it from any logical-code. For functions look into "/details"
+/// This file is a factory, must exempt it from any logical-code. For functions look into "/details"
 
 namespace Nott::Activation {
     enum class Type {

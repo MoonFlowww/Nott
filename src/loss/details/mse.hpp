@@ -45,7 +45,7 @@ namespace Nott::Loss::Details {
         }
 
         if (!weight_tensor) {
-            // Pure LibTorch MSE
+            /// Pure LibTorch MSE
             return F::mse_loss(
                 prediction,
                 target,

@@ -22,7 +22,7 @@
 
 namespace Nott::Layer::Details {
 
-    // -------- Options --------
+    /// -------- Options --------
     struct RNNOptions {
         std::int64_t input_size{};
         std::int64_t hidden_size{};
@@ -60,10 +60,10 @@ namespace Nott::Layer::Details {
         bool benchmark_cudnn{true};
     };
 
-    // xLSTMOptions mirrors LSTMOptions so existing descriptors compile.
+    /// xLSTMOptions mirrors LSTMOptions so existing descriptors compile.
     using xLSTMOptions = LSTMOptions;
 
-    // -------- Descriptors (carry Activation/Initialization + Local flags) --------
+    /// -------- Descriptors (carry Activation/Initialization + Local flags) --------
     struct RNNDescriptor {
         RNNOptions options{};
         ::Nott::Activation::Descriptor activation{::Nott::Activation::Identity};
@@ -92,10 +92,10 @@ namespace Nott::Layer::Details {
         ::Nott::LocalConfig local{};
     };
 
-    // -------- Internal detail helpers --------
+    /// -------- Internal detail helpers --------
     namespace Detail {
 
-        // Adapt any RNN-like forward() result into the first tensor (sequence output).
+        /// Adapt any RNN-like forward() result into the first tensor (sequence output).
         inline torch::Tensor take_recurrent_output(const torch::Tensor& t) {
             return t;
         }
@@ -103,7 +103,7 @@ namespace Nott::Layer::Details {
         inline torch::Tensor take_recurrent_output(const std::tuple<A, Rest...>& tup) {
             return std::get<0>(tup);
         }
-        // Convert our options to LibTorch's RNN/GRU/LSTM options
+        /// Convert our options to LibTorch's RNN/GRU/LSTM options
         inline torch::nn::RNNOptions to_torch_rnn_options(const RNNOptions& o)
         {
             auto options = torch::nn::RNNOptions(o.input_size, o.hidden_size);
@@ -141,7 +141,7 @@ namespace Nott::Layer::Details {
             return options;
         }
 
-        // Convert our options to LibTorch's LSTMOptions
+        /// Convert our options to LibTorch's LSTMOptions
         inline torch::nn::LSTMOptions to_torch_lstm_options(const LSTMOptions& o) {
             torch::nn::LSTMOptions opt(o.input_size, o.hidden_size);
             opt = opt.num_layers(o.num_layers);
@@ -152,21 +152,21 @@ namespace Nott::Layer::Details {
             return opt;
         }
 
-        // --- xLSTM: a thin wrapper around torch::nn::LSTM with extras (bias tweak, flags) ---
+        /// --- xLSTM: a thin wrapper around torch::nn::LSTM with extras (bias tweak, flags) ---
         class xLSTMImpl : public torch::nn::Module {
         public:
             explicit xLSTMImpl(const xLSTMOptions& options)
                 : options_(options),
                   lstm_(torch::nn::LSTM(to_torch_lstm_options(options))) {
 
-                // dtype for parameters (weights/bias of the LSTM)
+                /// dtype for parameters (weights/bias of the LSTM)
                 if (options_.param_dtype != at::kFloat) {
                     this->to(options_.param_dtype);
                 }
 
                 register_module("lstm", lstm_);
 
-                // cuDNN setup (use new precision API instead of deprecated allowTF32)
+                /// cuDNN setup (use new precision API instead of deprecated allowTF32)
                 const char* tf32_setting = options_.allow_tf32 ? "tf32" : "none";
                 at::globalContext().setAllowTF32CuDNN(options_.allow_tf32);
                 at::globalContext().setAllowTF32CuBLAS(options_.allow_tf32);
@@ -174,8 +174,8 @@ namespace Nott::Layer::Details {
                     at::globalContext().setBenchmarkCuDNN(options_.benchmark_cudnn);
                 }
 
-                // initialize weights/biases according to project's policy
-                // (we let higher-level Initializer handle weight init. Here we only fix forget bias.)
+                /// initialize weights/biases according to project's policy
+                /// (we let higher-level Initializer handle weight init. Here we only fix forget bias.)
                 if (options_.bias && options_.forget_gate_bias != 0.0) {
                     set_forget_gate_bias_(options_.forget_gate_bias);
                 }
@@ -183,7 +183,7 @@ namespace Nott::Layer::Details {
                 flatten_parameters_if_possible_();
             }
 
-            // Forward returns the sequence output tensor (T,B,H*D or B,T,H*D) for consistency
+            /// Forward returns the sequence output tensor (T,B,H*D or B,T,H*D) for consistency
             torch::Tensor forward(torch::Tensor x) {
                 ensure_input_rank_(x);
                 auto out = lstm_->forward(x); // tuple<Tensor output, (h, c)>
@@ -197,7 +197,7 @@ namespace Nott::Layer::Details {
                 }
             }
 
-            // Ensure (h0,c0) match expected sizes if we ever expose it (kept for parity with the old code).
+            /// Ensure (h0,c0) match expected sizes if we ever expose it (kept for parity with the old code).
             void ensure_hx_shapes_(const torch::Tensor& h0, const torch::Tensor& c0, const torch::Tensor& x) const {
                 const int64_t num_dir = options_.bidirectional ? 2 : 1;
                 const int64_t expected_h0_0 = options_.num_layers * num_dir;
@@ -221,14 +221,14 @@ namespace Nott::Layer::Details {
                 }
             }
 
-            // Set forget gate bias across all layers & directions.
+            /// Set forget gate bias across all layers & directions.
             void set_forget_gate_bias_(double value) {
                 torch::NoGradGuard no_grad;
                 const int64_t num_dir = options_.bidirectional ? 2 : 1;
                 const int64_t H = options_.hidden_size;
                 const int64_t fourH = 4 * H;
 
-                // Grab the parameter dictionary once so any pointers we take remain valid
+                /// Grab the parameter dictionary once so any pointers we take remain valid
                 auto named_params = lstm_->named_parameters(/*recurse=*/false);
 
                 for (int64_t layer = 0; layer < options_.num_layers; ++layer) {
@@ -260,12 +260,12 @@ namespace Nott::Layer::Details {
 
     } // namespace Detail
 
-    // Expose xLSTM in Nott::Layer::Details scope while keeping the impl in ::Detail
+    /// Expose xLSTM in Nott::Layer::Details scope while keeping the impl in ::Detail
     using Detail::xLSTMImpl;
     TORCH_MODULE(xLSTM);
 
-    // ---------------- Registry bindings ----------------
-    // We only bind RNN/LSTM/GRU/xLSTM here. S4/etc. live elsewhere.
+    /// ---------------- Registry bindings ----------------
+    /// We only bind RNN/LSTM/GRU/xLSTM here. S4/etc. live elsewhere.
 
     template <class Owner>
     RegisteredLayer build_registered_layer(Owner& owner, const RNNDescriptor& descriptor, std::size_t index)
@@ -297,7 +297,7 @@ namespace Nott::Layer::Details {
     RegisteredLayer build_registered_layer(Owner& owner, const LSTMDescriptor& descriptor, std::size_t index) {
         auto module = owner.register_module("recurrent_" + std::to_string(index), torch::nn::LSTM(Detail::to_torch_lstm_options(descriptor.options)));
 
-        // Optional initialization hook at Model level
+        /// Optional initialization hook at Model level
         if constexpr (requires(Owner& o, torch::nn::Module& m, ::Nott::Initialization::Descriptor d) {
             o.apply_initialization(m, d);
         }) {
@@ -364,7 +364,7 @@ namespace Nott::Layer::Details {
 
     template <class Owner>
     RegisteredLayer build_registered_layer(Owner& owner, const xLSTMDescriptor& descriptor, std::size_t index) {
-        // Build our wrapper (still uses torch::nn::LSTM underneath)
+        /// Build our wrapper (still uses torch::nn::LSTM underneath)
         auto module = owner.register_module("recurrent_" + std::to_string(index), xLSTM(descriptor.options));
 
         if constexpr (requires(Owner& o, torch::nn::Module& m, ::Nott::Initialization::Descriptor d) {
@@ -380,7 +380,7 @@ namespace Nott::Layer::Details {
         struct ForwardFunctor {
             decltype(module.get()) module_ptr;
             torch::Tensor operator()(torch::Tensor input) const {
-                // xLSTMImpl::forward already returns the sequence output
+                /// xLSTMImpl::forward already returns the sequence output
                 auto out = module_ptr->forward(std::move(input));
                 return Detail::take_recurrent_output(out);
             }

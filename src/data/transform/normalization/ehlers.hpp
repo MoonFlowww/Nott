@@ -7,14 +7,14 @@
 
 namespace Nott::Data::Transform::Normalization {
 
-    // Fisher transform on a bounded oscillator x in (-1,1).
+    /// Fisher transform on a bounded oscillator x in (-1,1).
     namespace Options {
         struct FisherOptions { double clamp = 0.999; };
     }
 
     inline at::Tensor FisherTransform(const at::Tensor& x_in, const Options::FisherOptions o = {}) {
         auto x = Details::to_float32(x_in).clamp(-static_cast<float>(o.clamp), static_cast<float>(o.clamp));
-        // 0.5 * ln((1+x)/(1-x)) = atanh(x)
+        /// 0.5 * ln((1+x)/(1-x)) = atanh(x)
         return 0.5f * (at::log1p(x) - at::log1p(-x));
     }
 
@@ -24,7 +24,7 @@ namespace Nott::Data::Transform::Normalization {
     }
 
 
-    //TODO: Implement Ehler loops for 2d timeseries
+    /// TODO: Implement Ehler loops for 2d timeseries
 }
 
 #endif // Nott_DATA_TRANSFORM_NORMALIZATION_EHLERS_HPP

@@ -1,7 +1,7 @@
 #ifndef Nott_VISION_HPP
 #define Nott_VISION_HPP
-// "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale" Dosovitskiy https://arxiv.org/pdf/2010.11929
-// Vision transformer blocks with optional Swin-style shifted window attention for hierarchical visual modeling.
+/// "An Image is Worth 16x16 Words: Transformers for Image Recognition at Scale" Dosovitskiy https://arxiv.org/pdf/2010.11929
+/// Vision transformer blocks with optional Swin-style shifted window attention for hierarchical visual modeling.
 
 #include <algorithm>
 #include <cstddef>

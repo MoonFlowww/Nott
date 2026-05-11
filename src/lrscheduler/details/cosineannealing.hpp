@@ -7,7 +7,7 @@
 #include <stdexcept>
 #include <utility>
 #include <vector>
-// "SGDR: Stochastic Gradient Descent with Warm Restarts" (cosine annealing) https://arxiv.org/pdf/1608.03983
+/// "SGDR: Stochastic Gradient Descent with Warm Restarts" (cosine annealing) https://arxiv.org/pdf/1608.03983
 #include <torch/torch.h>
 
 #include "common.hpp"

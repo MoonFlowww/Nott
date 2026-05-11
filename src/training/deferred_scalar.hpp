@@ -2,7 +2,7 @@
 #define Nott_DEFERRED_SCALAR_HPP
 /**
  * @file deferred_scalar.hpp
- * @brief Non-blocking GPU→CPU scalar transfer.
+ * @brief Non-blocking GPU to CPU scalar transfer.
  *
  * Call from_tensor() immediately after a GPU op, then materialize() later.
  * On CPU, from_tensor() is a synchronous no-op.

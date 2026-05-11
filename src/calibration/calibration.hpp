@@ -1,6 +1,6 @@
 #ifndef Nott_CALIBRATION_HPP
 #define Nott_CALIBRATION_HPP
-// This file is an factory, must exempt it from any logical-code. For functions look into "/details"
+/// This file is an factory, must exempt it from any logical-code. For functions look into "/details"
 
 #include <algorithm>
 #include <cmath>

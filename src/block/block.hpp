@@ -1,6 +1,6 @@
 #ifndef Nott_BLOCK_HPP
 #define Nott_BLOCK_HPP
-// This file is an factory, must exempt it from any logical-code. For functions look into "/details"
+/// This file is an factory, must exempt it from any logical-code. For functions look into "/details"
 #include <cstddef>
 #include <initializer_list>
 #include <utility>

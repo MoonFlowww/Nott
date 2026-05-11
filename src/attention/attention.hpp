@@ -1,6 +1,6 @@
 #ifndef Nott_ATTENTION_HPP
 #define Nott_ATTENTION_HPP
-// This file is an factory, must exempt it from any logical-code. For functions look into "/details"
+/// This file is an factory, must exempt it from any logical-code. For functions look into "/details"
 
 #include <cstdint>
 #include <variant>

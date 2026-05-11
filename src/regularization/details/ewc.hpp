@@ -1,6 +1,6 @@
 #ifndef Nott_EWC_HPP
 #define Nott_EWC_HPP
-// https://arxiv.org/pdf/1612.00796
+/// https://arxiv.org/pdf/1612.00796
 #include <torch/torch.h>
 
 namespace Nott::Regularization::Details {

@@ -1,6 +1,6 @@
 #ifndef Nott_LAYER_S4_HPP
 #define Nott_LAYER_S4_HPP
-// "Efficiently Modeling Long Sequences with Structured State Spaces" (S4) https://arxiv.org/pdf/2111.00396
+/// "Efficiently Modeling Long Sequences with Structured State Spaces" (S4) https://arxiv.org/pdf/2111.00396
 #include <cmath>
 #include <cstdint>
 #include <optional>
@@ -85,7 +85,7 @@ namespace Nott::Layer::Details {
         inline torch::Tensor default_s4d_eigenvalues(std::int64_t N, const torch::TensorOptions& options)
         {
             auto indices = torch::arange(N, options.dtype(torch::kFloat64));
-            // Mirror the S4D initialization: real negative spectrum spaced log
+            /// Mirror the S4D initialization: real negative spectrum spaced log
             auto base = torch::logspace(
                 std::log10(0.1),
                 std::log10(10.0),

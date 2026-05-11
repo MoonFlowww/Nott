@@ -6,9 +6,9 @@
 #include <torch/torch.h>
 
 #include "reduction.hpp"
-//TODO: rework
-// - using single path : std::visit([&](const auto& d){ return Loss::Details::compute(d, prediction, target, weight); }, *loss_descriptor_);
-//      --> Cos Embedd expect 2 inputs
+/// TODO: rework
+/// - using single path : std::visit([&](const auto& d){ return Loss::Details::compute(d, prediction, target, weight); }, *loss_descriptor_);
+///      --> Cos Embedd expect 2 inputs
 namespace Nott::Loss::Details {
 
     struct CosineEmbeddingOptions {
@@ -20,8 +20,8 @@ namespace Nott::Loss::Details {
         CosineEmbeddingOptions options{};
     };
 
-    // Compat signature to match Model::compute_loss(...):
-    // prediction must contain a pair: [B, 2, D...] or [2, B, D...]
+    /// Compat signature to match Model::compute_loss(...):
+    /// prediction must contain a pair: [B, 2, D...] or [2, B, D...]
     inline torch::Tensor compute(const CosineEmbeddingDescriptor& descriptor,
                                  const torch::Tensor& prediction,
                                  const torch::Tensor& target,
@@ -52,7 +52,7 @@ namespace Nott::Loss::Details {
                         .reduction(to_torch_reduction<torch::nn::CosineEmbeddingLossOptions>(
                             descriptor.options.reduction));
 
-        // y should be 1D with {-1, +1}
+        /// y should be 1D with {-1, +1}
         auto y = target.to(x1.device(), x1.scalar_type());
         if (y.dim() != 1) {
             y = y.reshape({-1});

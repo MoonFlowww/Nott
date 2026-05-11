@@ -1,6 +1,6 @@
 #ifndef Nott_DROPOUT_HPP
 #define Nott_DROPOUT_HPP
-// "Dropout: A Simple Way to Prevent Neural Networks from Overfitting" https://arxiv.org/pdf/1207.0580
+/// "Dropout: A Simple Way to Prevent Neural Networks from Overfitting" https://arxiv.org/pdf/1207.0580
 #include "../../activation/activation.hpp"
 #include "../../common/local.hpp"
 #include <torch/torch.h>
@@ -38,7 +38,7 @@ namespace Nott::Layer::Details {
             const double p = options_.probability;
             const double std = std::sqrt(p / (1.0 - p)); // matches inverted dropout variance
 
-            // mean=1 keeps E[output]=input
+            /// mean=1 keeps E[output]=input
             auto eps = torch::empty_like(input).normal_(1.0, std);
             auto output = input * eps;
 

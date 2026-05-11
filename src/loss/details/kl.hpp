@@ -34,7 +34,7 @@ namespace Nott::Loss::Details {
 
         auto tgt = target.to(input.device(), input.scalar_type());
 
-        // If target is given as class indices (int64), convert to one-hot prob
+        /// If target is given as class indices (int64), convert to one-hot prob
         if (tgt.dtype() == torch::kLong) {
             const auto dim = descriptor.options.log_softmax_dim;
             const auto num_classes = input.size(dim);

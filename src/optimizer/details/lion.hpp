@@ -1,6 +1,6 @@
 #ifndef Nott_LION_HPP
 #define Nott_LION_HPP
-// "Symbolic Discovery of Optimization Algorithms" (Lion) https://arxiv.org/pdf/2302.06675
+/// "Symbolic Discovery of Optimization Algorithms" (Lion) https://arxiv.org/pdf/2302.06675
 #include <algorithm>
 #include <cmath>
 #include <cstdint>

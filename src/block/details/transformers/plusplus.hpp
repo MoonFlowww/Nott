@@ -1,8 +1,8 @@
 #ifndef Nott_PLUSPLUS_HPP
 #define Nott_PLUSPLUS_HPP
-//https://arxiv.org/pdf/2003.04974
-// "Transformer++: Improving Parallelism, Efficiency and Performance of Transformer Models"
-// Enhanced encoder/decoder stack adding auxiliary attention pathways and adaptive routing for efficient sequence modeling.
+/// https://arxiv.org/pdf/2003.04974
+/// "Transformer++: Improving Parallelism, Efficiency and Performance of Transformer Models"
+/// Enhanced encoder/decoder stack adding auxiliary attention pathways and adaptive routing for efficient sequence modeling.
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>

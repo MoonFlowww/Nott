@@ -17,7 +17,7 @@
 #include <stdexcept>
 #include <string>
 #include <torch/torch.h>
-// GraphMode fwd-declared via training_policy.hpp
+/// GraphMode fwd-declared via training_policy.hpp
 #include "training_policy.hpp"
 
 namespace Nott::Training {

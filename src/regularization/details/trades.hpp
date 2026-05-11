@@ -1,6 +1,6 @@
 #ifndef Nott_REGULARIZATION_DETAILS_TRADES_HPP
 #define Nott_REGULARIZATION_DETAILS_TRADES_HPP
-// "Theoretically Principled Trade-off between Robustness and Accuracy" (TRADES) https://arxiv.org/pdf/1901.08573
+/// "Theoretically Principled Trade-off between Robustness and Accuracy" (TRADES) https://arxiv.org/pdf/1901.08573
 #include <torch/torch.h>
 
 #include "common.hpp"

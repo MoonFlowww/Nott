@@ -73,7 +73,7 @@ namespace Nott::Data::Transform::Normalization {
         return move_time_restore(y, plan);
     }
 
-    // Exponentially-weighted z-score (one-pass, leakage-safe)
+    /// Exponentially-weighted z-score (one-pass, leakage-safe)
     inline at::Tensor EWZscore(const at::Tensor& x_in, const Options::EWZscoreOptions o) {
         using namespace Details;
         TORCH_CHECK(o.alpha > 0.0 && o.alpha <= 1.0, "alpha must be in (0,1]");
@@ -84,11 +84,11 @@ namespace Nott::Data::Transform::Normalization {
         const int64_t T = x0.size(-1);
         auto y = at::empty_like(x0);
 
-        // Initialize from first point
+        /// Initialize from first point
         auto m_prev = x0.select(-1, 0);
         auto v_prev = at::zeros_like(m_prev);
 
-        // t=0 -> z=0 by convention
+        /// t=0 -> z=0 by convention
         y.select(-1, 0).zero_();
 
         const double a = o.alpha;
@@ -97,7 +97,7 @@ namespace Nott::Data::Transform::Normalization {
             auto delta = xt - m_prev;
             auto m_t = m_prev + a * delta;
 
-            // EW variance (stable form)
+            /// EW variance (stable form)
             auto v_t = (1.0 - a) * (v_prev + a * delta * (xt - m_t));
             auto s_t = clamp_std(v_t.sqrt(), o.eps);
             auto zt  = (xt - m_t) / s_t;
@@ -109,7 +109,7 @@ namespace Nott::Data::Transform::Normalization {
         return move_time_restore(y, plan);
     }
 
-    // Robust Z using median/MAD (static baseline to avoid heavy rolling medians)
+    /// Robust Z using median/MAD (static baseline to avoid heavy rolling medians)
     inline at::Tensor RobustZscore(const at::Tensor& x_in, const Options::RobustZscoreOptions opt) {
         using namespace Details;
         check_temporal_dim(x_in, opt.temporal_dim);
@@ -126,7 +126,7 @@ namespace Nott::Data::Transform::Normalization {
             base = x0; // use entire series for baseline (leakage if used online)
         }
 
-        // Median via kthvalue (works on last dim)
+        /// Median via kthvalue (works on last dim)
         auto med = std::get<0>(base.kthvalue((base.size(-1) + 1) / 2, -1, /*keepdim=*/true));
         auto mad = (base - med).abs();
         mad = std::get<0>(mad.kthvalue((mad.size(-1) + 1) / 2, -1, /*keepdim=*/true));

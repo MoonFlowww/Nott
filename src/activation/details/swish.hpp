@@ -1,6 +1,6 @@
 #ifndef Nott_SWISH_HPP
 #define Nott_SWISH_HPP
-// "Searching for Activation Functions" (original SiLU/Swish proposal) https://arxiv.org/pdf/1710.05941
+/// "Searching for Activation Functions" (original SiLU/Swish proposal) https://arxiv.org/pdf/1710.05941
 #include <torch/torch.h>
 
 #include <utility>

@@ -65,7 +65,7 @@ auto fetch_batch_impl(
     torch::Tensor batch_inputs, batch_targets;
 
     if (epoch_indices.defined()) {
-        /* -- shuffle path -- */
+        /// Shuffle path
         auto batch_indices = epoch_indices.narrow(0, offset, current_batch);
         if (!batch_indices.device().is_cpu())
             batch_indices = batch_indices.to(torch::kCPU);
@@ -78,7 +78,7 @@ auto fetch_batch_impl(
         batch_inputs  = ensure_pinned(std::move(batch_inputs));
         batch_targets = ensure_pinned(std::move(batch_targets));
     } else {
-        /* -- sequential (narrow) path -- zero-copy view -- */
+        /// Sequential (narrow) path, zero-copy view
         batch_inputs  = dataset.inputs.narrow(0, offset, current_batch);
         batch_targets = dataset.targets.narrow(0, offset, current_batch);
     }
@@ -180,12 +180,12 @@ struct alignas(64) PrefetchState {
     explicit PrefetchState(int device_index)
         : stream(torch::cuda::getStreamFromPool(/*high=*/false, device_index)) {}
 
-    // Hot path -- read on every batch iteration, packed into one cache line
+    /// Hot path -- read on every batch iteration, packed into one cache line
     std::array<bool, 2> pending{false, false};
     std::array<bool, 2> input_stable{false, false};
     std::array<bool, 2> target_stable{false, false};
 
-    // Cold path -- accessed once per transfer, separate cache lines
+    /// Cold path -- accessed once per transfer, separate cache lines
     torch::cuda::CUDAStream stream;
     std::array<torch::Tensor, 2> inputs{};
     std::array<torch::Tensor, 2> targets{};

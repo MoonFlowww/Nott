@@ -41,7 +41,7 @@ namespace Nott::Optimizer {
     using AdafactorOptions = Details::AdafactorOptions;
     using AdafactorDescriptor = Details::AdafactorDescriptor;
 
-    //Sophia
+    /// Sophia
     using SophiaGOptions = Details::SophiaGOptions;
     using SophiaGDescriptor = Details::SophiaGDescriptor;
 
@@ -49,7 +49,7 @@ namespace Nott::Optimizer {
     using SophiaHDescriptor = Details::SophiaHDescriptor;
 
 
-    //Muon
+    /// Muon
     using MuonOptions = Details::MuonOptions;
     using MuonDescriptor = Details::MuonDescriptor;
 

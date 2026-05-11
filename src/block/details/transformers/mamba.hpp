@@ -1,9 +1,9 @@
 #ifndef Nott_MAMBA_HPP
 #define Nott_MAMBA_HPP
-//https://arxiv.org/pdf/2312.00752
-// "Mamba: Linear-Time Sequence Modeling with Selective State Spaces" — Gu et al., 2023 (arXiv:2312.00752).
-// Implements the selective state space sequence model with convolutional gating and RMS normalization
-// providing an alternative to attention for long-context sequence modeling.
+/// https://arxiv.org/pdf/2312.00752
+/// "Mamba: Linear-Time Sequence Modeling with Selective State Spaces", Gu et al., 2023 (arXiv:2312.00752).
+/// Implements the selective state space sequence model with convolutional gating and RMS normalization
+/// providing an alternative to attention for long-context sequence modeling.
 #include <cmath>
 #include <cstddef>
 #include <cstdint>

@@ -1,6 +1,6 @@
 #ifndef Nott_LAMB_HPP
 #define Nott_LAMB_HPP
-// "Large Batch Optimization for Deep Learning: Training BERT in 76 minutes" (LAMB) https://arxiv.org/pdf/1904.00962
+/// "Large Batch Optimization for Deep Learning: Training BERT in 76 minutes" (LAMB) https://arxiv.org/pdf/1904.00962
 #include <algorithm>
 #include <cmath>
 #include <cstdint>

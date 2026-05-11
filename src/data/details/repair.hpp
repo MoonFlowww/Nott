@@ -1,6 +1,6 @@
 #ifndef Nott_REPAIR_HPP
 #define Nott_REPAIR_HPP
-// 1) HoloClean: Holistic Data Repairs with Probabilistic Inference https://arxiv.org/pdf/1702.00820
+/// 1) HoloClean: Holistic Data Repairs with Probabilistic Inference https://arxiv.org/pdf/1702.00820
 #include <algorithm>
 #include <cmath>
 #include <functional>
@@ -59,7 +59,7 @@ namespace Nott::Data::Repair {
 
         HoloClean() = default;
 
-        //Configure the probability threshold that a candidate must exceed to applied as a repair.
+        /// Configure the probability threshold that a candidate must exceed to applied as a repair.
         void set_repair_threshold(double threshold) { repair_threshold_ = threshold; }
 
         /**

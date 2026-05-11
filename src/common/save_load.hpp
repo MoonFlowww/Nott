@@ -320,8 +320,8 @@ namespace Nott::Common::SaveLoad {
             t.put("embed_dim", o.embed_dim);
             t.put("mlp_ratio", o.mlp_ratio);
 
-            // If you have a project-level activation serializer, replace the next line with that call.
-            // I serialize the activation descriptor by its 'type' enum value (as integer).
+            /// If you have a project-level activation serializer, replace the next line with that call.
+            /// I serialize the activation descriptor by its 'type' enum value (as integer).
             t.put("activation.type", static_cast<std::uint64_t>(o.activation.type));
             t.put("bias", o.bias);
             return t;
@@ -1001,7 +1001,7 @@ namespace Nott::Common::SaveLoad {
             t.put("embed_dim", o.embed_dim);
             t.put("mlp_ratio", o.mlp_ratio);
 
-            // If you have a project-level activation serializer, prefer that:
+            /// If you have a project-level activation serializer, prefer that:
             // t.add_child("activation", serialize_activation_descriptor(o.activation));
             t.put("activation.type", static_cast<std::uint64_t>(o.activation.type));
 
@@ -1064,7 +1064,7 @@ namespace Nott::Common::SaveLoad {
             t.put("embed_dim", o.embed_dim);
             t.put("mlp_ratio", o.mlp_ratio);
 
-            // Prefer calling your project-level activation serializer if present:
+            /// Prefer calling your project-level activation serializer if present:
             // t.add_child("activation", Detail::serialize_activation_descriptor(o.activation));
             t.put("activation.type", static_cast<std::uint64_t>(o.activation.type));
             t.put("bias", o.bias);
@@ -1102,7 +1102,7 @@ namespace Nott::Common::SaveLoad {
             return t;
         }
 
-        // positional encoding serializer — simple mapping, safe fallback if you don't already have one.
+        /// Positional encoding serializer, simple mapping, safe fallback if you don't already have one.
         inline std::string serialize_positional_encoding_type(::Nott::Layer::Details::PositionalEncodingType t) {
             switch (t) {
                 case ::Nott::Layer::Details::PositionalEncodingType::None: return "none";
@@ -1172,7 +1172,7 @@ namespace Nott::Common::SaveLoad {
             t.put("embed_dim", o.embed_dim);
             t.put("mlp_ratio", o.mlp_ratio);
 
-            // Prefer your project-level activation serializer if present:
+            /// Prefer your project-level activation serializer if present:
             // t.add_child("activation", serialize_activation_descriptor(o.activation));
             t.put("activation.type", static_cast<std::uint64_t>(o.activation.type));
 
@@ -2843,7 +2843,7 @@ namespace Nott::Common::SaveLoad {
                     tree.put("options.pre_norm", concrete.options.pre_norm);
                     tree.put("options.final_layer_norm", concrete.options.final_layer_norm);
 
-                    // layers vector
+                    /// layers vector
                     PropertyTree layers;
                     for (const auto &layer : concrete.layers) {
                         PropertyTree entry;
@@ -2857,7 +2857,7 @@ namespace Nott::Common::SaveLoad {
 
                         tree.put("type", "vision_encoder");
 
-                        // top-level options
+                        /// top-level options
                         tree.put("options.layers", static_cast<std::uint64_t>(concrete.options.layers));
                         tree.put("options.embed_dim", concrete.options.embed_dim);
                         tree.put("options.variant", Detail::serialize_vision_variant(concrete.options.variant));
@@ -2873,7 +2873,7 @@ namespace Nott::Common::SaveLoad {
                         tree.put("options.pre_norm", concrete.options.pre_norm);
                         tree.put("options.final_layer_norm", concrete.options.final_layer_norm);
 
-                        // layers vector
+                        /// layers vector
                         PropertyTree layers;
                         for (const auto &layer : concrete.layers) {
                             PropertyTree entry;
@@ -2891,7 +2891,7 @@ namespace Nott::Common::SaveLoad {
 
                         tree.put("type", "longformer_xl_encoder");
 
-                        // top-level options
+                        /// top-level options
                         tree.put("options.layers", static_cast<std::uint64_t>(concrete.options.layers));
                         tree.put("options.embed_dim", concrete.options.embed_dim);
                         tree.add_child("options.attention", Detail::serialize_longformer_attention_options(concrete.options.attention));
@@ -2908,7 +2908,7 @@ namespace Nott::Common::SaveLoad {
                         tree.put("options.pre_norm", concrete.options.pre_norm);
                         tree.put("options.final_layer_norm", concrete.options.final_layer_norm);
 
-                        // per-layer descriptors
+                        /// per-layer descriptors
                         PropertyTree layers;
                         for (const auto &layer : concrete.layers) {
                             PropertyTree entry;

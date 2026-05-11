@@ -1,6 +1,6 @@
 #ifndef Nott_MAS_HPP
 #define Nott_MAS_HPP
-//https://arxiv.org/pdf/1711.09601
+/// https://arxiv.org/pdf/1711.09601
 #include <torch/torch.h>
 
 namespace Nott::Regularization::Details {

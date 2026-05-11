@@ -1,6 +1,6 @@
 #ifndef Nott_BERT_HPP
 #define Nott_BERT_HPP
-// "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding" https://arxiv.org/pdf/1810.04805
+/// "BERT: Pre-training of Deep Bidirectional Transformers for Language Understanding" https://arxiv.org/pdf/1810.04805
 
 #include <algorithm>
 #include <cstddef>

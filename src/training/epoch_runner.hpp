@@ -91,7 +91,7 @@ void run_epochs(
     for (std::size_t epoch = 0; epoch < policy.epochs; ++epoch) {
         const auto epoch_start = std::chrono::steady_clock::now();
 
-        /* shuffle indices */
+        /// Shuffle indices
         torch::Tensor epoch_indices;
         if (policy.shuffle) {
             epoch_indices = (total_samples > 1)
@@ -99,7 +99,7 @@ void run_epochs(
                 : torch::arange(total_samples, index_opts);
         }
 
-        /* accumulate on device — no per-batch CPU sync */
+        /// Accumulate on device, no per-batch CPU sync.
         torch::Tensor accumulation = torch::zeros({},
             torch::TensorOptions().dtype(torch::kFloat64).device(device));
         std::int64_t total_weight  = 0;
@@ -130,18 +130,18 @@ void run_epochs(
 #endif
         );
 
-        /* materialise train loss (one GPU sync per epoch) */
+        /// Materialise train loss (one GPU sync per epoch)
         double train_loss_val = 0.0;
         if (total_weight > 0)
             train_loss_val = (accumulation / static_cast<double>(total_weight))
                              .item<double>();
 
-        /* test evaluation */
+        /// Test evaluation
         std::optional<double> test_loss{};
         if (test_dataset)
             test_loss = compute_test_loss(model, *test_dataset, policy);
 
-        /* best-state tracking */
+        /// Best-state tracking
         bool improved = false;
         std::optional<double> delta{};
         if (test_loss) {
@@ -171,7 +171,7 @@ void run_epochs(
             best_state_captured = true;
         }
 
-        /* epoch-end callback */
+        /// Epoch-end callback
         const double duration = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - epoch_start).count();
 
@@ -188,7 +188,7 @@ void run_epochs(
         });
     }
 
-    /* restore best state */
+    /// Restore best state
     if (policy.restore_best_state && best_state_captured) {
         torch::NoGradGuard ng;
         auto params = model.parameters();

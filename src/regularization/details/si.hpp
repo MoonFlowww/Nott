@@ -1,6 +1,6 @@
 #ifndef Nott_SI_HPP
 #define Nott_SI_HPP
-//https://arxiv.org/pdf/1703.04200
+/// https://arxiv.org/pdf/1703.04200
 #include <torch/torch.h>
 
 namespace Nott::Regularization::Details {

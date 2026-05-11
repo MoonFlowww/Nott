@@ -64,7 +64,7 @@ namespace Nott::Data::Transform::Format {
             auto opts = torch::nn::functional::InterpolateFuncOptions()
                             .size(std::vector<int64_t>{target_size[0], target_size[1]});
 
-            // Ici on fait le mapping, SANS helper de retour
+            /// Ici on fait le mapping, SANS helper de retour
             switch (interp_mode) {
                 case Options::InterpMode::Bilinear:
                     opts = opts.mode(torch::kBilinear).align_corners(false);

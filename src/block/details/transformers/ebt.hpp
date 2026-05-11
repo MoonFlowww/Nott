@@ -1,8 +1,8 @@
 #ifndef Nott_EBT_HPP
 #define Nott_EBT_HPP
-// "Energy-Based Transformers" — Haziza et al., 2025 (arXiv:2507.02092).
-// Models discrete or continuous modalities by refining latent tokens through learned energy gradients instead of explicit softmax attention.
-// https://arxiv.org/pdf/2507.02092
+/// "Energy-Based Transformers", Haziza et al., 2025 (arXiv:2507.02092).
+/// Models discrete or continuous modalities by refining latent tokens through learned energy gradients instead of explicit softmax attention.
+/// https://arxiv.org/pdf/2507.02092
 #include <algorithm>
 #include <cstddef>
 #include <cstdint>
@@ -317,7 +317,7 @@ namespace Nott::Block::Details::Transformer::EBT {
 
                 if (context_features.dim() == prediction_features.dim() &&
                     context_features.size(1) == prediction_features.size(1)) {
-                    // already aligned
+                    /// already aligned
                 } else if (context_features.dim() == prediction_features.dim()) {
                     context_features = context_features.mean(1, true);
                 } else if (context_features.dim() + 1 == prediction_features.dim()) {

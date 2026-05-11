@@ -19,7 +19,7 @@ namespace Nott::Data::Transform::Normalization {
         };
     }
 
-    // y = ( (x+s)^λ - 1 ) / λ, λ!=0;  log(x+s) if λ==0
+    /// y = ((x+s)^lambda - 1) / lambda, lambda!=0;  log(x+s) if lambda==0
     inline at::Tensor BoxCox(const at::Tensor& x_in, const Options::BoxCoxOptions o = {}) {
         auto x = Details::to_float32(x_in) + static_cast<float>(o.shift);
         auto xp = x.clamp_min(o.eps);
@@ -47,7 +47,7 @@ namespace Nott::Data::Transform::Normalization {
         return at::where(pos, y_pos, y_neg);
     }
 
-    // Signed power: sign(x)*|x|^p (safe for fractional p)
+    /// Signed power: sign(x)*|x|^p (safe for fractional p)
     inline at::Tensor SignedPower(const at::Tensor& x_in, double p) {
         auto x = Details::to_float32(x_in);
         return x.sign() * at::pow(x.abs(), static_cast<float>(p));

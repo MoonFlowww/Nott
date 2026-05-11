@@ -45,7 +45,7 @@ namespace Nott::Data::Manipulation {
 
     namespace Normalization = ::Nott::Data::Transform::Normalization;
 
-    //Fisher-Yates
+    /// Fisher-Yates
     inline std::pair<torch::Tensor, torch::Tensor> Shuffle(const torch::Tensor& inputs, const torch::Tensor& targets, const std::optional<std::uint64_t>& seed = std::nullopt) {
         if (inputs.dim() == 0 || targets.dim() == 0 || inputs.size(0) == 0) {
             return {inputs.clone(), targets.clone()};

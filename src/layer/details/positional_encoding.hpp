@@ -1,6 +1,6 @@
 #ifndef Nott_POSITIONAL_ENCODING_HPP
 #define Nott_POSITIONAL_ENCODING_HPP
-// "Attention Is All You Need" (sinusoidal positional encoding) https://arxiv.org/pdf/1706.03762
+/// "Attention Is All You Need" (sinusoidal positional encoding) https://arxiv.org/pdf/1706.03762
 
 #include <cstddef>
 #include <cstdint>

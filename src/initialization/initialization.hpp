@@ -1,6 +1,6 @@
 #ifndef Nott_INITIALIZATION_HPP
 #define Nott_INITIALIZATION_HPP
-// This file is a factory, must exempt it from any logical-code. For functions look into "/details"
+/// This file is a factory, must exempt it from any logical-code. For functions look into "/details"
 
 namespace Nott::Initialization {
     enum class Type {
