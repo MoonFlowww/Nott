@@ -91,6 +91,15 @@
 #include "regularization/apply.hpp"
 #include "calibration/calibration.hpp"
 #include "training/kfold.hpp"
+#include "training/deferred_scalar.hpp"
+#include "training/training_policy.hpp"
+#include "training/training_preflight.hpp"
+#include "training/dataset_pipeline.hpp"
+#include "training/batch_iterator.hpp"
+#include "training/step_executor.hpp"
+#include "training/graph_coordinator.hpp"
+#include "training/epoch_runner.hpp"
+#include "training/compute_dataset_loss.hpp"
 
 namespace Nott {
     template<class... Ts>
@@ -226,91 +235,7 @@ namespace Nott {
 
     public:
         struct TrainingTelemetry {
-            struct DeferredScalar {
-                torch::Tensor host_tensor{};
-#ifdef TORCH_CUDA_AVAILABLE
-                mutable std::shared_ptr<at::cuda::CUDAEvent> ready_event{};
-                int device_index{-1};
-#endif
-                mutable std::optional<double> cached_value{};
-
-                DeferredScalar() = default;
-
-                static DeferredScalar from_tensor(torch::Tensor tensor, const torch::Device &device) {
-                    DeferredScalar scalar{};
-
-                    if (!tensor.defined()) {
-                        return scalar;
-                    }
-
-                    tensor = tensor.detach();
-                    if (tensor.scalar_type() != torch::kFloat64) {
-                        tensor = tensor.to(torch::kFloat64);
-                    }
-
-#ifdef TORCH_CUDA_AVAILABLE
-                    if (device.is_cuda()) {
-                        const auto device_index = device.index();
-                        auto stream = at::cuda::getCurrentCUDAStream(device_index);
-                        auto host_copy = tensor.to(torch::kCPU, torch::kFloat64, /*non_blocking=*/true);
-                        auto event = std::make_shared<at::cuda::CUDAEvent>();
-                        event->record(stream);
-                        scalar.host_tensor = std::move(host_copy);
-                        scalar.ready_event = std::move(event);
-                        scalar.device_index = device_index;
-                        return scalar;
-                    }
-#endif
-
-                    scalar.host_tensor = tensor.to(torch::kCPU, torch::kFloat64);
-                    return scalar;
-                }
-
-                [[nodiscard]] bool defined() const noexcept { return host_tensor.defined(); }
-
-                [[nodiscard]] bool is_ready() const {
-                    if (!host_tensor.defined()) {
-                        return false;
-                    }
-
-#ifdef TORCH_CUDA_AVAILABLE
-                    if (ready_event) {
-                        if (!ready_event->query()) {
-                            return false;
-                        }
-                        ready_event.reset();
-                    }
-#endif
-
-                    if (!cached_value) {
-                        cached_value = host_tensor.item<double>();
-                    }
-
-                    return true;
-                }
-
-
-                double materialize() const {
-                    if (!host_tensor.defined()) {
-                        return 0.0;
-                    }
-
-#ifdef TORCH_CUDA_AVAILABLE
-                    if (ready_event) {
-                        if (!ready_event->query()) {
-                            ready_event->synchronize();
-                        }
-                        ready_event.reset();
-                    }
-#endif
-
-                    if (!cached_value) {
-                        cached_value = host_tensor.item<double>();
-                    }
-
-                    return *cached_value;
-                }
-            };
+            using DeferredScalar = Nott::Training::DeferredScalar;
 
             struct EpochSnapshot {
                 std::size_t epoch_index{};
@@ -2676,38 +2601,164 @@ namespace Nott {
             }
 
 
-            auto training_step_binding = TrainingDetails::TrainingStepBinding{};
-
-            const bool use_buffer = effective_options.buffer_vram > 0;
-
-
             if (test_dataset) {
                 *test_dataset = TrainingDetails::ensure_contiguous(std::move(*test_dataset),
                                                                    effective_options.memory_format);
                 *test_dataset = TrainingDetails::ensure_cpu(std::move(*test_dataset), effective_options.memory_format);
             }
 
-            auto run_training_dataset = [&](typename TrainingDetails::TensorDataset dataset,
-                                            const std::optional<typename TrainingDetails::TensorDataset> &
-                                            evaluation_dataset) {
-                auto training_dataset = std::move(dataset);
-                if (effective_options.shuffle) {
-                    if (use_buffer) {
-                        TrainingDetails::run_epochs<true, true>(*this, training_dataset, evaluation_dataset,
-                                                                effective_options, training_step_binding);
-                    } else {
-                        TrainingDetails::run_epochs<false, true>(*this, training_dataset, evaluation_dataset,
-                                                                 effective_options, training_step_binding);
+            /* -- Resolve graph mode once before the loop -- */
+            const auto req_graph_mode   = effective_options.graph_mode;
+            const bool graph_active     = graph_execution_enabled(req_graph_mode, GraphExecutionPhase::Training);
+            const GraphMode eff_graph   = graph_active ? req_graph_mode : GraphMode::Disabled;
+            const bool graph_enabled    = eff_graph != GraphMode::Disabled;
+
+            if (eff_graph == GraphMode::Capture)
+                reset_graph_shape_cache(eff_graph);
+            else if (eff_graph == GraphMode::Replay)
+                ensure_graph_replay_ready(eff_graph);
+            if (graph_enabled)
+                ensure_optimizer_graph_capability(eff_graph);
+
+            /* -- Build training policy -- */
+            Training::TrainingPolicy policy = Training::make_training_policy(
+                effective_options,
+                device_.is_cuda(),
+                has_convolutional_layers_,
+                has_regularization(),
+                /*prefetch_possible=*/device_.is_cuda(),
+                channels_last_applicable,
+                eff_graph);
+
+            /* -- CUDA prefetch state -- */
+#ifdef TORCH_CUDA_AVAILABLE
+            std::optional<Training::PrefetchState> prefetch_state_opt;
+            if (device_.is_cuda())
+                prefetch_state_opt.emplace(device_.index());
+            Training::PrefetchState* prefetch_ptr =
+                prefetch_state_opt ? &*prefetch_state_opt : nullptr;
+#endif
+
+            const bool regularization_active = has_regularization();
+            const bool amp_enabled           = is_amp_training_active();
+
+            /* -- Graph coordinator (persists across all epochs) -- */
+            Training::GraphModeCoordinator graph_coord{eff_graph};
+
+            /* -- Per-batch training step -- */
+            auto training_step = [this, &graph_coord, graph_enabled,
+                                   regularization_active, amp_enabled, &policy]
+                (Model& m, torch::Tensor inputs, torch::Tensor targets) -> torch::Tensor
+            {
+                if (graph_enabled &&
+                    static_cast<std::size_t>(inputs.size(0)) != policy.batch_size) {
+                    throw std::invalid_argument(
+                        "Graph optimisation requires every batch to match the captured batch "
+                        "size (" + std::to_string(policy.batch_size) + "). Received "
+                        + std::to_string(inputs.size(0))
+                        + " samples; pad or drop the remainder before enabling graph replay.");
+                }
+
+                if (graph_coord.requested != GraphMode::Capture) {
+                    if (graph_enabled) {
+                        m.prepare_optimizers_for_graph(graph_coord.requested);
+                        m.ensure_graph_batch_shapes(graph_coord.requested, inputs, targets);
                     }
-                } else {
-                    if (use_buffer) {
-                        TrainingDetails::run_epochs<true, false>(*this, training_dataset, evaluation_dataset,
-                                                                 effective_options, training_step_binding);
-                    } else {
-                        TrainingDetails::run_epochs<false, false>(*this, training_dataset, evaluation_dataset,
-                                                                  effective_options, training_step_binding);
+                    return m.graph_train_step_impl(
+                        std::move(inputs), std::move(targets),
+                        graph_coord.requested, regularization_active, amp_enabled);
+                }
+
+                /* Capture path — may need one retry on shape change */
+                bool retry_done = false;
+                while (true) {
+                    const GraphMode batch_mode = graph_coord.resolve(m, inputs, targets);
+                    m.prepare_optimizers_for_graph(batch_mode);
+                    m.ensure_graph_batch_shapes(batch_mode, inputs, targets);
+                    try {
+                        auto loss = m.graph_train_step_impl(
+                            inputs, targets, batch_mode, regularization_active, amp_enabled);
+                        if (batch_mode == GraphMode::Capture)
+                            graph_coord.on_captured();
+                        return loss;
+                    } catch (const std::runtime_error&) {
+                        if (batch_mode == GraphMode::Replay && !retry_done) {
+                            graph_coord.on_replay_failed(m);
+                            retry_done = true;
+                            continue;
+                        }
+                        throw;
                     }
                 }
+            };
+
+            /* -- Epoch-end callback: telemetry + console -- */
+            auto on_epoch_end = [&](const Training::EpochLogEntry& entry) {
+                auto lrs = collect_learning_rates();
+
+                auto wrap_double = [](double v) {
+                    auto t = torch::tensor(v, torch::TensorOptions().dtype(torch::kFloat64));
+                    return TrainingTelemetry::DeferredScalar::from_tensor(
+                        std::move(t), torch::Device{torch::kCPU});
+                };
+
+                std::optional<TrainingTelemetry::DeferredScalar> deferred_test;
+                if (entry.test_loss) deferred_test = wrap_double(*entry.test_loss);
+
+                const double latency = entry.processed_steps > 0
+                    ? entry.duration_seconds / static_cast<double>(entry.processed_steps)
+                    : 0.0;
+
+                record_epoch_telemetry({
+                    entry.epoch_index,
+                    wrap_double(entry.train_loss),
+                    std::move(deferred_test),
+                    entry.delta,
+                    std::move(lrs),
+                    entry.timestamp,
+                    entry.duration_seconds,
+                    wrap_double(latency)
+                });
+
+                if (effective_options.monitor && effective_options.stream) {
+                    TrainingDetails::log_epoch(
+                        *effective_options.stream,
+                        entry.epoch_index,
+                        effective_options.epoch,
+                        entry.train_loss,
+                        entry.test_loss,
+                        entry.delta,
+                        entry.improved,
+                        entry.duration_seconds);
+                }
+            };
+
+            /* -- Test-loss callback -- */
+            auto compute_test_loss_fn = [&](auto& m, const auto& ds,
+                                            const Training::TrainingPolicy& pol)
+                -> std::optional<double>
+            {
+                return Training::compute_dataset_loss(
+                    m, ds, pol.batch_size,
+                    pol.use_buffer(), pol.buffer_vram,
+                    pol.memory_format);
+            };
+
+            std::size_t global_step = 0;
+
+            auto run_training_dataset = [&](typename TrainingDetails::TensorDataset dataset,
+                                            const std::optional<typename TrainingDetails::TensorDataset>&
+                                                evaluation_dataset) {
+                Training::run_epochs(
+                    *this, dataset, evaluation_dataset, policy,
+                    compute_test_loss_fn,
+                    on_epoch_end,
+                    training_step,
+                    global_step
+#ifdef TORCH_CUDA_AVAILABLE
+                    , prefetch_ptr
+#endif
+                );
             };
 
 
@@ -2861,6 +2912,7 @@ namespace Nott {
             }
         }
 
+    public:
         void reset_graph_shape_cache(GraphMode mode) const {
             if (mode == GraphMode::Disabled) {
                 return;
@@ -2870,6 +2922,7 @@ namespace Nott {
             graph_target_shape_cache_.reset();
         }
 
+    private:
         void ensure_graph_input_shape(GraphMode mode, const torch::Tensor &tensor) const {
             if (mode == GraphMode::Disabled) {
                 return;
@@ -3003,73 +3056,6 @@ namespace Nott {
             return stream.str();
         }
 
-        struct BatchSignature {
-            GraphTensorSignature inputs{};
-            GraphTensorSignature targets{};
-
-            [[nodiscard]] static BatchSignature
-            from_tensors(const torch::Tensor &inputs, const torch::Tensor &targets) {
-                BatchSignature signature{};
-                signature.inputs = describe_tensor_signature(inputs);
-                signature.targets = describe_tensor_signature(targets);
-                return signature;
-            }
-
-            [[nodiscard]] bool matches(const torch::Tensor &inputs, const torch::Tensor &targets) const {
-                return tensor_matches_signature(inputs, this->inputs)
-                       && tensor_matches_signature(targets, this->targets);
-            }
-
-            bool operator==(const BatchSignature &other) const noexcept {
-                return signatures_equal(inputs, other.inputs) && signatures_equal(targets, other.targets);
-            }
-
-            struct Hash {
-                std::size_t operator()(const BatchSignature &signature) const noexcept {
-                    std::size_t seed = 0;
-                    BatchSignature::hash_signature(seed, signature.inputs);
-                    BatchSignature::hash_signature(seed, signature.targets);
-                    return seed;
-                }
-            };
-
-        private:
-            friend struct Hash;
-
-            static void hash_combine(std::size_t &seed, std::size_t value) noexcept {
-                seed ^= value + 0x9e3779b9 + (seed << 6) + (seed >> 2);
-            }
-
-            static void hash_signature(std::size_t &seed, const GraphTensorSignature &signature) noexcept {
-                hash_combine(seed, static_cast<std::size_t>(signature.dtype));
-                hash_combine(seed, static_cast<std::size_t>(signature.device.type()));
-                hash_combine(seed, static_cast<std::size_t>(signature.device.index()));
-                hash_combine(seed, signature.shape.size());
-                for (const auto dimension: signature.shape) {
-                    hash_combine(seed, static_cast<std::size_t>(dimension));
-                }
-            }
-
-            static bool tensor_matches_signature(const torch::Tensor &tensor, const GraphTensorSignature &signature) {
-                if (tensor.device() != signature.device || tensor.scalar_type() != signature.dtype) {
-                    return false;
-                }
-
-                const auto dimensions = tensor.dim();
-                if (static_cast<std::size_t>(dimensions) != signature.shape.size()) {
-                    return false;
-                }
-
-                for (std::int64_t index = 0; index < dimensions; ++index) {
-                    if (tensor.size(index) != signature.shape[index]) {
-                        return false;
-                    }
-                }
-
-                return true;
-            }
-        };
-
         void ensure_graph_regularization_metadata_capacity(GraphMode mode) const {
             if (mode == GraphMode::Disabled) {
                 return;
@@ -3196,6 +3182,7 @@ namespace Nott {
             telemetry_.append_epoch(std::move(snapshot));
         }
 
+    public:
         void record_dataset_loss_telemetry(TrainingTelemetry::DatasetLossSnapshot snapshot) {
             telemetry_.append_dataset_loss(std::move(snapshot));
         }
@@ -3222,6 +3209,7 @@ namespace Nott {
             return learning_rates;
         }
 
+    private:
         [[nodiscard]] torch::Tensor ensure_input_memory_format(torch::Tensor tensor) const {
             if (!tensor.defined()) {
                 return tensor;
@@ -3716,6 +3704,7 @@ namespace Nott {
                 binding.descriptor);
         }
 
+    public:
         void update_regularization_states(std::size_t step_index, bool regularization_active = false) {
             if (!regularization_active && !has_regularization()) {
                 return;
@@ -3734,6 +3723,7 @@ namespace Nott {
             }
         }
 
+    private:
         torch::Tensor graph_train_step_impl(torch::Tensor batch_inputs, torch::Tensor batch_targets,
                                             GraphMode graph_mode, bool regularization_active, bool amp_enabled) {
             const auto phase = GraphExecutionPhase::Training;
@@ -3956,30 +3946,21 @@ namespace Nott {
             return torch::Tensor{};
         }
 
+    public:
         void step_scheduler() {
             if (scheduler_) {
                 scheduler_->step();
             }
         }
 
-
+    private:
         struct TrainingDetails {
             struct TensorDataset {
                 torch::Tensor inputs;
                 torch::Tensor targets;
             };
 
-            struct TrainingStepBinding {
-                using Impl = torch::Tensor (Model::*)(torch::Tensor, torch::Tensor, GraphMode, bool, bool);
-
-                Impl impl{&Model::graph_train_step_impl};
-
-                [[nodiscard]] torch::Tensor operator()(Model &model, torch::Tensor inputs, torch::Tensor targets, GraphMode mode, bool regularization_active, bool amp_enabled) const {
-                    return (model.*impl)(std::move(inputs), std::move(targets), mode, regularization_active, amp_enabled);
-                }
-            };
-
-            [[nodiscard]] static TensorDataset prepare_tensor_dataset(torch::Tensor inputs, torch::Tensor targets,
+[[nodiscard]] static TensorDataset prepare_tensor_dataset(torch::Tensor inputs, torch::Tensor targets,
                                                                       torch::MemoryFormat memory_format =
                                                                               torch::MemoryFormat::Contiguous) {
                 auto prepared_inputs = std::move(inputs);
@@ -4058,831 +4039,6 @@ namespace Nott {
                 }
 
                 return TensorDataset{torch::stack(std::move(inputs)), torch::stack(std::move(targets))};
-            }
-
-            template<bool BufferVRAM, bool ShouldShuffle>
-            static void run_epochs(Model &model, TensorDataset &train_dataset, const std::optional<TensorDataset> &test_dataset, const TrainOptions &options, const TrainingStepBinding &training_step) {
-                const auto device = model.device();
-                const auto total_samples = train_dataset.inputs.size(0);
-                const auto batch_size = static_cast<std::int64_t>(options.batch_size);
-                const auto requested_graph_mode = options.graph_mode;
-                const bool graph_mode_active = model.graph_execution_enabled(requested_graph_mode, GraphExecutionPhase::Training);
-                const auto graph_mode = graph_mode_active ? requested_graph_mode : GraphMode::Disabled;
-                const bool graph_mode_enabled = graph_mode != GraphMode::Disabled;
-                const bool amp_enabled = model.is_amp_training_active();
-
-                if (graph_mode == GraphMode::Capture) {
-                    model.reset_graph_shape_cache(graph_mode);
-                } else if (graph_mode == GraphMode::Replay) {
-                    model.ensure_graph_replay_ready(graph_mode);
-                }
-
-                if (graph_mode_enabled) {
-                    model.ensure_optimizer_graph_capability(graph_mode);
-                }
-
-                torch::TensorOptions index_options = torch::TensorOptions().dtype(torch::kLong);
-
-                if (train_dataset.inputs.device().is_cpu() && !train_dataset.inputs.is_pinned()) {
-                    train_dataset.inputs = train_dataset.inputs.pin_memory();
-                }
-                if (train_dataset.targets.device().is_cpu() && !train_dataset.targets.is_pinned()) {
-                    train_dataset.targets = train_dataset.targets.pin_memory();
-                }
-
-
-                auto best_test = std::optional<double>{};
-                std::vector<torch::Tensor> best_parameters;
-                std::vector<torch::Tensor> best_buffers;
-                bool best_state_captured = false;
-
-                std::size_t step_index = 0;
-
-                const bool regularization_active = model.has_regularization();
-
-                enum class GraphCaptureStatus : uint8_t { NeverCaptured, Pending, Ready };
-                GraphCaptureStatus graph_capture_status{GraphCaptureStatus::NeverCaptured};
-                BatchSignature active_batch_signature{};
-
-                struct PendingEpochLog {
-                    std::size_t epoch_index{};
-                    std::size_t total_epochs{};
-                    TrainingTelemetry::DeferredScalar train_loss{};
-                    std::optional<double> test_loss{};
-                    std::optional<double> delta{};
-                    bool improved{false};
-                    double duration_seconds{0.0};
-                };
-
-                std::deque<PendingEpochLog> pending_epoch_logs{};
-
-                auto flush_pending_epoch_logs = [&](bool drain) {
-                    if (!options.monitor || options.stream == nullptr || pending_epoch_logs.empty())
-                        return;
-
-                    while (!pending_epoch_logs.empty()) {
-                        auto &front = pending_epoch_logs.front();
-                        if (!front.train_loss.is_ready()) {
-                            if (!drain) {
-                                break;
-                            }
-                            (void) front.train_loss.materialize();
-                        }
-
-                        const auto train_loss_value = front.train_loss.materialize();
-                        log_epoch(*options.stream,
-                            front.epoch_index,
-                            front.total_epochs,
-                            train_loss_value,
-                            front.test_loss,
-                            front.delta,
-                            front.improved,
-                            front.duration_seconds);
-                        pending_epoch_logs.pop_front();
-                    }
-                };
-
-                torch::Tensor device_batch_inputs_buffer;
-                torch::Tensor device_batch_targets_buffer;
-                bool input_buffer_stable = false;
-                bool target_buffer_stable = false;
-                const bool channels_last_inputs = options.memory_format == torch::MemoryFormat::ChannelsLast;
-
-                TrainingTelemetry::DeferredScalar last_train_loss_scalar;
-
-#ifdef TORCH_CUDA_AVAILABLE
-                struct PrefetchState {
-                    explicit PrefetchState(int device_index) : stream(
-                        torch::cuda::getStreamFromPool(/*isHighPriority=*/false, device_index)) {
-                    }
-
-                    torch::cuda::CUDAStream stream;
-                    std::array<torch::Tensor, 2> inputs{};
-                    std::array<torch::Tensor, 2> targets{};
-                    std::array<at::cuda::CUDAEvent, 2> events{at::cuda::CUDAEvent{}, at::cuda::CUDAEvent{}};
-                    std::array<bool, 2> pending{false, false};
-                    std::array<bool, 2> input_stable{false, false};
-                    std::array<bool, 2> target_stable{false, false};
-                };
-
-                std::optional<PrefetchState> prefetch_state{};
-                if (device.is_cuda()) {
-                    prefetch_state.emplace(device.index());
-                }
-#endif
-
-
-                auto ensure_layout = [&](torch::Tensor tensor, bool apply_channels_last) {
-                    if (!tensor.defined()) {
-                        return tensor;
-                    }
-                    if (apply_channels_last && tensor.dim() >= 4) {
-                        if (!tensor.is_contiguous(torch::MemoryFormat::ChannelsLast)) {
-                            tensor = tensor.contiguous(torch::MemoryFormat::ChannelsLast);
-                        }
-                    } else if (!tensor.is_contiguous()) {
-                        tensor = tensor.contiguous();
-                    }
-                    return tensor;
-                };
-
-                auto stage_to_device = [&](torch::Tensor tensor, torch::Tensor &buffer, bool &stable, bool apply_channels_last, bool force_non_blocking = false, bool use_prefetch_stream = false) {
-                    tensor = ensure_layout(std::move(tensor), apply_channels_last);
-                    if (!tensor.defined() || tensor.device() == device) {
-                        return tensor;
-                    }
-                    auto options = tensor.options().device(device);
-
-                    const bool non_blocking = force_non_blocking || tensor.is_pinned();
-
-                    const bool requires_channels_last = apply_channels_last && tensor.dim() >= 4;
-
-                    if (stable && buffer.defined() && !buffer.sizes().equals(tensor.sizes())) {
-                        stable = false;
-                    }
-
-                    if (!stable) {
-                        if (!buffer.defined() || buffer.device() != device || buffer.scalar_type() != tensor.scalar_type() || !buffer.sizes().equals(tensor.sizes()) || (requires_channels_last ? !buffer.is_contiguous(torch::MemoryFormat::ChannelsLast) : !buffer.is_contiguous())) {
-                            const auto memory_format = requires_channels_last ? torch::MemoryFormat::ChannelsLast : torch::MemoryFormat::Contiguous;
-                            buffer = torch::empty(tensor.sizes(), options, memory_format);
-                        } else {
-                            stable = true;
-                        }
-                    }
-
-                    (void) use_prefetch_stream;
-#ifdef TORCH_CUDA_AVAILABLE
-                    if (use_prefetch_stream && prefetch_state) {
-                        torch::cuda::CUDAStreamGuard guard(prefetch_state->stream);
-                        buffer.copy_(tensor, non_blocking);
-                    } else {
-                        buffer.copy_(tensor, non_blocking);
-                    }
-#else
-                    buffer.copy_(tensor, non_blocking);
-#endif
-                    return buffer;
-                };
-
-#ifdef TORCH_CUDA_AVAILABLE
-                auto wait_for_prefetch_slot = [&](std::size_t slot) {
-                    if (!prefetch_state || !prefetch_state->pending[slot]) {
-                        return;
-                    }
-                    auto current_stream = at::cuda::getCurrentCUDAStream(device.index());
-                    current_stream.wait(prefetch_state->events[slot]);
-                    prefetch_state->pending[slot] = false;
-                };
-
-                auto schedule_prefetch_from_provider = [&](auto &&provider, std::size_t slot) -> bool {
-                    if (!prefetch_state) {
-                        return false;
-                    }
-
-                    prefetch_state->pending[slot] = false;
-
-                    auto batch = provider();
-                    if (!batch.first.defined() || !batch.second.defined()) {
-                        return false;
-                    }
-
-                    prefetch_state->inputs[slot] = stage_to_device(
-                        std::move(batch.first),
-                        prefetch_state->inputs[slot],
-                        prefetch_state->input_stable[slot],
-                        channels_last_inputs,
-                        /*force_non_blocking=*/true,
-                        /*use_prefetch_stream=*/true);
-
-                    prefetch_state->targets[slot] = stage_to_device(
-                        std::move(batch.second),
-                        prefetch_state->targets[slot],
-                        prefetch_state->target_stable[slot],
-                        /*apply_channels_last=*/false,
-                        /*force_non_blocking=*/true,
-                        /*use_prefetch_stream=*/true);
-
-                    {
-                        torch::cuda::CUDAStreamGuard guard(prefetch_state->stream);
-                        prefetch_state->events[slot].record(prefetch_state->stream);
-                    }
-                    prefetch_state->pending[slot] = true;
-                    return true;
-                };
-
-#endif
-
-
-                for (std::size_t epoch = 0; epoch < options.epoch; ++epoch) {
-                    const auto epoch_start = std::chrono::steady_clock::now();
-                    torch::Tensor epoch_indices;
-                    if constexpr (ShouldShuffle) {
-                        input_buffer_stable  = false;
-                        target_buffer_stable = false;
-#ifdef TORCH_CUDA_AVAILABLE
-                        if (prefetch_state) {
-                            prefetch_state->input_stable.fill(false);
-                            prefetch_state->target_stable.fill(false);
-                        }
-#endif
-                        epoch_indices = (total_samples > 1) ? torch::randperm(total_samples, index_options) : torch::arange(total_samples, index_options);
-                    }
-
-
-
-                    torch::Tensor accumulation_tensor = torch::zeros({}, torch::TensorOptions().dtype(torch::kFloat64).device(device));
-                    std::int64_t weight = 0;
-                    std::size_t processed_steps = 0;
-
-#ifdef TORCH_CUDA_AVAILABLE
-                    auto process_with_prefetch = [&](auto &&provider, std::size_t max_batches) {
-                        if (!prefetch_state) {
-                            return;
-                        }
-
-                        std::size_t current_slot = 0;
-                        bool has_batch = schedule_prefetch_from_provider(provider, current_slot);
-                        for (std::size_t batch_index = 0; batch_index < max_batches && has_batch; ++batch_index) {
-                            wait_for_prefetch_slot(current_slot);
-                            const auto processed = process_batch(prefetch_state->inputs[current_slot],
-                                                                 prefetch_state->targets[current_slot]);
-                            weight += processed;
-
-                            const std::size_t next_slot = current_slot ^ 1U;
-                            has_batch = schedule_prefetch_from_provider(provider, next_slot);
-                            current_slot = next_slot;
-                        }
-                    };
-#endif
-
-
-                    const std::size_t total_batches = total_samples > 0
-                                                          ? static_cast<std::size_t>(
-                                                              (total_samples + batch_size - 1) / batch_size)
-                                                          : 0;
-
-                    auto fetch_batch = [&](std::size_t batch_index) {
-                        const auto offset = static_cast<std::int64_t>(batch_index) * batch_size;
-                        const auto remaining = total_samples - offset;
-                        const auto current_batch = std::min<std::int64_t>(batch_size, remaining);
-                        if (current_batch <= 0)
-                            return std::pair<torch::Tensor, torch::Tensor>{torch::Tensor{}, torch::Tensor{}};
-
-                        if (graph_mode_enabled && current_batch != batch_size) {
-                            throw std::invalid_argument(
-                                "Graph optimisation requires every batch to match the captured batch size ("
-                                + std::to_string(batch_size)
-                                + "). Received " + std::to_string(current_batch)
-                                + " samples; pad or drop the remainder before enabling graph replay.");
-                        }
-
-
-                        torch::Tensor batch_inputs;
-                        torch::Tensor batch_targets;
-
-                        if constexpr (ShouldShuffle) {
-                            auto batch_indices = epoch_indices.narrow(0, offset, current_batch);
-                            if (!batch_indices.device().is_cpu()) {
-                                batch_indices = batch_indices.to(torch::kCPU);
-                            }
-                            batch_inputs = train_dataset.inputs.index_select(0, batch_indices);
-                            batch_targets = train_dataset.targets.index_select(0, batch_indices);
-                            batch_inputs = ensure_layout(std::move(batch_inputs), channels_last_inputs);
-                            batch_targets = ensure_layout(std::move(batch_targets), false);
-                            if (batch_inputs.device().is_cpu() && !batch_inputs.is_pinned()) {
-                                batch_inputs = batch_inputs.pin_memory();
-                            }
-                            if (batch_targets.device().is_cpu() && !batch_targets.is_pinned()) {
-                                batch_targets = batch_targets.pin_memory();
-                            }
-                        } else { // narrow() is a zero-copy view; parent is already pinned + correctly laid out
-                            batch_inputs  = train_dataset.inputs.narrow(0, offset, current_batch);
-                            batch_targets = train_dataset.targets.narrow(0, offset, current_batch);
-                        }
-                        return std::pair<torch::Tensor, torch::Tensor>{
-                            std::move(batch_inputs), std::move(batch_targets)
-                        };
-                    };
-
-                    const BatchSignature *batch_signature{nullptr}; // Deprecate, TODO: remove it
-
-                    auto process_batch = [&](torch::Tensor batch_inputs, torch::Tensor batch_targets) {
-                        if (!batch_inputs.defined() || !batch_targets.defined()) {
-                            return std::int64_t{0};
-                        }
-
-
-                        const auto current_batch = batch_targets.size(0);
-                        if (current_batch <= 0) {
-                            return std::int64_t{0};
-                        }
-
-                        torch::Tensor loss;
-                        bool replay_retry_attempted = false;
-
-                        while (true) {
-                            GraphMode batch_graph_mode = graph_mode;
-                            const BatchSignature *batch_signature{nullptr};
-
-                            if (graph_mode == GraphMode::Capture) {
-                                // Build signature once per unique batch size; reuse on match
-                                if (graph_capture_status == GraphCaptureStatus::NeverCaptured || !active_batch_signature.matches(batch_inputs, batch_targets)) { // New shape -> restart
-                                    active_batch_signature = BatchSignature::from_tensors(batch_inputs, batch_targets);
-                                    graph_capture_status  = GraphCaptureStatus::Pending;
-                                    model.reset_graph_shape_cache(GraphMode::Capture);
-                                    batch_graph_mode = GraphMode::Capture;
-                                } else if (graph_capture_status == GraphCaptureStatus::Pending) { // same shape, capture not yet confirmed
-                                    batch_graph_mode = GraphMode::Capture;
-                                } else { // Replay-ready
-                                    batch_graph_mode = GraphMode::Replay;
-                                }
-                            }
-                            try {
-                                if (graph_mode_enabled) {
-                                    model.prepare_optimizers_for_graph(batch_graph_mode);
-                                    model.ensure_graph_batch_shapes(batch_graph_mode, batch_inputs, batch_targets);
-                                }
-
-                                loss = training_step(model, batch_inputs, batch_targets, batch_graph_mode, regularization_active, amp_enabled);
-
-                                if (graph_mode == GraphMode::Capture && batch_graph_mode == GraphMode::Capture) {
-                                    graph_capture_status = GraphCaptureStatus::Ready;
-                                }
-
-                                break;
-                            } catch (const std::runtime_error &) {
-                                if (!(graph_mode == GraphMode::Capture)) {
-                                    throw;
-                                }
-
-                                if (batch_graph_mode == GraphMode::Replay && !replay_retry_attempted) {
-                                    graph_capture_status = GraphCaptureStatus::Pending;
-                                    model.reset_graph_shape_cache(GraphMode::Capture);
-                                    replay_retry_attempted = true;
-                                    continue;
-                                }
-
-                                throw;
-                            }
-                        }
-
-                        {
-                            model.step_scheduler();
-
-                            if (regularization_active) {
-                                model.update_regularization_states(step_index, true);
-                            }
-                            ++step_index;
-                            ++processed_steps;
-
-                            {
-                                auto detached_loss = loss.detach().to(torch::kFloat64);
-                                accumulation_tensor += detached_loss * static_cast<double>(current_batch);
-                            }
-
-                        }
-                        return current_batch;
-                    };
-
-                    if constexpr (BufferVRAM) {
-                        if (graph_mode_enabled) {
-#ifdef TORCH_CUDA_AVAILABLE
-                            if (prefetch_state) {
-                                std::size_t next_batch_index = 0;
-                                auto provider = [&]() -> std::pair<torch::Tensor, torch::Tensor> {
-                                    if (next_batch_index >= total_batches) {
-                                        return {};
-                                    }
-                                    auto batch = fetch_batch(next_batch_index);
-                                    ++next_batch_index;
-                                    return batch;
-                                };
-                                process_with_prefetch(provider, total_batches);
-                            } else
-#endif
-                            {
-                                for (std::size_t batch_index = 0; batch_index < total_batches; ++batch_index) {
-                                    auto batch_pair = fetch_batch(batch_index);
-                                    const auto processed = process_batch(
-                                        std::move(batch_pair.first), std::move(batch_pair.second));
-                                    weight += processed;
-                                }
-                            }
-                        } else {
-                            std::deque<std::pair<torch::Tensor, torch::Tensor> > buffered_batches;
-                            std::size_t next_batch_to_load = 0;
-                            const std::size_t max_batches = total_batches == 0 ? 1 : total_batches;
-                            const std::size_t buffer_limit = std::max<std::size_t>(1,
-                                std::min<std::size_t>(options.buffer_vram + 1, max_batches));
-
-                            auto maintain_buffer = [&](std::size_t current_index) {
-                                const std::size_t desired_size = std::min(buffer_limit, total_batches - current_index);
-                                while (buffered_batches.size() < desired_size && next_batch_to_load < total_batches) {
-                                    auto batch = fetch_batch(next_batch_to_load);
-                                    buffered_batches.push_back(std::move(batch));
-                                    ++next_batch_to_load;
-                                }
-                            };
-
-#ifdef TORCH_CUDA_AVAILABLE
-                            if (prefetch_state) {
-                                std::size_t processed_batches = 0;
-                                auto provider = [&]() -> std::pair<torch::Tensor, torch::Tensor> {
-                                    maintain_buffer(processed_batches);
-                                    if (buffered_batches.empty()) {
-                                        return {};
-                                    }
-                                    auto batch_pair = std::move(buffered_batches.front());
-                                    buffered_batches.pop_front();
-                                    ++processed_batches;
-                                    maintain_buffer(processed_batches);
-                                    return batch_pair;
-                                };
-                                process_with_prefetch(provider, total_batches);
-                            } else
-#endif
-                            {
-                                for (std::size_t batch_index = 0; batch_index < total_batches; ++batch_index) {
-                                    maintain_buffer(batch_index);
-                                    if (buffered_batches.empty()) {
-                                        break;
-                                    }
-
-                                    auto batch_pair = std::move(buffered_batches.front());
-                                    buffered_batches.pop_front();
-
-                                    const auto processed = process_batch(
-                                        std::move(batch_pair.first), std::move(batch_pair.second));
-                                    weight += processed;
-
-
-                                    maintain_buffer(batch_index + 1);
-                                }
-                            }
-                        }
-                    } else {
-#ifdef TORCH_CUDA_AVAILABLE
-                        if (prefetch_state) {
-                            std::size_t next_batch_index = 0;
-                            auto provider = [&]() -> std::pair<torch::Tensor, torch::Tensor> {
-                                if (next_batch_index >= total_batches) {
-                                    return {};
-                                }
-                                auto batch = fetch_batch(next_batch_index);
-                                ++next_batch_index;
-                                return batch;
-                            };
-                            process_with_prefetch(provider, total_batches);
-                        } else
-#endif
-                        {
-                            for (std::size_t batch_index = 0; batch_index < total_batches; ++batch_index) {
-                                auto batch_pair = fetch_batch(batch_index);
-                                const auto processed = process_batch(std::move(batch_pair.first),
-                                                                     std::move(batch_pair.second));
-                                weight += processed;
-                            }
-                        }
-                    }
-
-                    TrainingTelemetry::DeferredScalar train_loss_scalar;
-                    torch::Tensor train_loss_tensor;
-                    if (weight > 0) {
-                        train_loss_tensor = (accumulation_tensor / static_cast<double>(weight)).cpu();
-                    } else {
-                        train_loss_tensor = torch::zeros({}, torch::TensorOptions().dtype(torch::kFloat64));
-                    }
-                    train_loss_scalar = TrainingTelemetry::DeferredScalar::from_tensor(std::move(train_loss_tensor), device);
-                    last_train_loss_scalar = train_loss_scalar;
-
-                    std::optional<TrainingTelemetry::DeferredScalar> test_loss_scalar{};
-
-                    std::optional<double> test_loss{};
-                    if (test_dataset) {
-                        test_loss_scalar = compute_dataset_loss<BufferVRAM>(
-                            model, *test_dataset, options.batch_size, options.buffer_vram);
-                        if (test_loss_scalar) {
-                            test_loss = test_loss_scalar->materialize();
-                        }
-                    }
-
-                    bool improved = false;
-                    std::optional<double> delta{};
-                    if (test_loss) {
-                        if (!best_test) {
-                            improved = true;
-                            best_test = test_loss;
-                        } else {
-                            const auto previous_best = *best_test;
-                            delta = *test_loss - previous_best;
-                            if (*test_loss < previous_best) {
-                                improved = true;
-                                best_test = test_loss;
-                            }
-                        }
-                    }
-
-                    if (improved && options.restore_best_state) {
-                        best_parameters.clear();
-                        best_buffers.clear();
-                        best_parameters.reserve(model.parameters().size());
-                        best_buffers.reserve(model.buffers().size());
-
-                        for (auto &parameter: model.parameters()) {
-                            if (parameter.defined()) {
-                                best_parameters.push_back(parameter.detach().clone(torch::MemoryFormat::Preserve));
-                            } else {
-                                best_parameters.push_back({});
-                            }
-                        }
-
-                        for (auto &buffer: model.buffers()) {
-                            if (buffer.defined()) {
-                                best_buffers.push_back(buffer.detach().clone(torch::MemoryFormat::Preserve));
-                            } else {
-                                best_buffers.push_back({});
-                            }
-                        }
-
-                        best_state_captured = true;
-                    }
-
-
-                    const auto duration_seconds = std::chrono::duration<double>(
-                        std::chrono::steady_clock::now() - epoch_start).count();
-
-                    const auto epoch_timestamp = std::chrono::system_clock::now();
-                    auto learning_rates = model.collect_learning_rates();
-                    TrainingTelemetry::DeferredScalar step_latency_scalar;
-                    if (processed_steps > 0) {
-                        const auto average_step_latency = duration_seconds / static_cast<double>(processed_steps);
-                        auto latency_tensor = torch::tensor(average_step_latency,
-                                                            torch::TensorOptions().dtype(torch::kFloat64));
-                        const torch::Device cpu_device{torch::kCPU};
-                        step_latency_scalar = TrainingTelemetry::DeferredScalar::from_tensor(
-                            std::move(latency_tensor), cpu_device);
-                    }
-                    model.record_epoch_telemetry({
-                        epoch + 1,
-                        train_loss_scalar,
-                        test_loss_scalar,
-                        delta,
-                        std::move(learning_rates),
-                        epoch_timestamp,
-                        duration_seconds,
-                        step_latency_scalar
-                    });
-
-                    if (options.monitor && options.stream) {
-                        pending_epoch_logs.push_back({
-                            epoch + 1,
-                            options.epoch,
-                            train_loss_scalar,
-                            test_loss,
-                            delta,
-                            improved,
-                            duration_seconds
-                        });
-                        flush_pending_epoch_logs(false);
-                    }
-                }
-                flush_pending_epoch_logs(true);
-                if (options.restore_best_state && best_state_captured) {
-                    [[maybe_unused]] const auto train_loss = last_train_loss_scalar.materialize();
-                    std::cout << "[Nott] Reloading best state of the network..." << std::endl;
-                    torch::NoGradGuard no_grad{};
-                    auto parameters = model.parameters();
-                    const auto parameter_limit = std::min(parameters.size(), best_parameters.size());
-                    for (std::size_t index = 0; index < parameter_limit; ++index) {
-                        auto &target = parameters[index];
-                        const auto &source = best_parameters[index];
-                        if (target.defined() && source.defined()) {
-                            target.copy_(source);
-                        }
-                    }
-
-                    auto buffers = model.buffers();
-                    const auto buffer_limit = std::min(buffers.size(), best_buffers.size());
-                    for (std::size_t index = 0; index < buffer_limit; ++index) {
-                        auto &target = buffers[index];
-                        const auto &source = best_buffers[index];
-                        if (target.defined() && source.defined()) {
-                            target.copy_(source);
-                        }
-                    }
-                }
-            }
-
-
-            template<bool BufferVRAM>
-            static std::optional<TrainingTelemetry::DeferredScalar> compute_dataset_loss(
-                Model &model, const TensorDataset &dataset, std::size_t batch_size, std::size_t buffer_vram) {
-                if (!dataset.inputs.defined() || !dataset.targets.defined()) {
-                    return std::nullopt;
-                }
-                if (dataset.inputs.size(0) == 0) {
-                    return std::nullopt;
-                }
-
-                if (batch_size == 0) {
-                    throw std::invalid_argument("Batch size must be greater than zero when computing dataset loss.");
-                }
-
-                if constexpr (!BufferVRAM) {
-                    (void) buffer_vram;
-                }
-
-                const auto device = model.device();
-                const auto total_samples = dataset.inputs.size(0);
-                const bool regularization_active = model.has_regularization();
-
-                torch::NoGradGuard no_grad;
-                const bool was_training = model.is_training();
-                model.eval();
-
-                torch::Tensor dataset_inputs = dataset.inputs;
-                torch::Tensor dataset_targets = dataset.targets;
-
-                if constexpr (BufferVRAM) {
-                    if (!device.is_cuda()) {
-                        throw std::runtime_error(
-                            "VRAM buffering for dataset loss requires the model to be on a CUDA device.");
-                    }
-                    if (dataset_inputs.defined() && !dataset_inputs.device().is_cpu()) {
-                        dataset_inputs = dataset_inputs.to(torch::kCPU);
-                    }
-                    if (dataset_targets.defined() && !dataset_targets.device().is_cpu()) {
-                        dataset_targets = dataset_targets.to(torch::kCPU);
-                    }
-                }
-
-                const bool channels_last_inputs =
-                        model.preferred_tensor_memory_format() == torch::MemoryFormat::ChannelsLast;
-
-                auto ensure_layout = [&](torch::Tensor tensor, bool apply_channels_last) {
-                    if (!tensor.defined()) {
-                        return tensor;
-                    }
-                    if (apply_channels_last && tensor.dim() >= 4) {
-                        if (!tensor.is_contiguous(torch::MemoryFormat::ChannelsLast)) {
-                            tensor = tensor.contiguous(torch::MemoryFormat::ChannelsLast);
-                        }
-                    } else if (!tensor.is_contiguous()) {
-                        tensor = tensor.contiguous();
-                    }
-                    return tensor;
-                };
-
-
-                if (dataset_inputs.device().is_cpu() && !dataset_inputs.is_pinned()) {
-                    dataset_inputs = dataset_inputs.pin_memory();
-                }
-                if (dataset_targets.device().is_cpu() && !dataset_targets.is_pinned()) {
-                    dataset_targets = dataset_targets.pin_memory();
-                }
-
-                const auto batch_extent = static_cast<std::int64_t>(batch_size);
-                const std::size_t total_batches = total_samples > 0
-                                                      ? static_cast<std::size_t>(
-                                                          (total_samples + batch_extent - 1) / batch_extent)
-                                                      : 0;
-
-
-                double accumulation_val = 0.0;
-                std::int64_t weight = 0;
-
-                torch::Tensor device_batch_inputs_buffer;
-                torch::Tensor device_batch_targets_buffer;
-
-
-
-                auto stage_to_device = [&](torch::Tensor tensor, torch::Tensor &buffer, bool apply_channels_last) {
-                    tensor = ensure_layout(std::move(tensor), apply_channels_last);
-                    if (!tensor.defined() || tensor.device() == device) {
-                        return tensor;
-                    }
-
-                    auto options = tensor.options().device(device);
-                    const bool non_blocking = tensor.is_pinned();
-                    const bool requires_channels_last = apply_channels_last && tensor.dim() >= 4;
-
-                    if (!buffer.defined()
-                        || buffer.device() != device
-                        || buffer.scalar_type() != tensor.scalar_type()
-                        || !buffer.sizes().equals(tensor.sizes())
-                        || (requires_channels_last
-                                ? !buffer.is_contiguous(torch::MemoryFormat::ChannelsLast)
-                                : !buffer.is_contiguous())) {
-                        const auto memory_format = requires_channels_last
-                                                       ? torch::MemoryFormat::ChannelsLast
-                                                       : torch::MemoryFormat::Contiguous;
-                        buffer = torch::empty(tensor.sizes(), options, memory_format);
-                    }
-
-                    buffer.copy_(tensor, non_blocking);
-                    return buffer;
-                };
-
-
-                auto prepare_batch = [&](torch::Tensor batch_inputs,
-                                         torch::Tensor batch_targets) -> std::optional<StreamingBatch> {
-                    if (!batch_inputs.defined() || !batch_targets.defined()) {
-                        return std::nullopt;
-                    }
-
-                    auto staged_inputs = stage_to_device(std::move(batch_inputs),
-                                                         device_batch_inputs_buffer,
-                                                         channels_last_inputs);
-                    auto staged_targets = stage_to_device(std::move(batch_targets),
-                                                          device_batch_targets_buffer,
-                                                          false);
-
-                    if (!staged_inputs.defined() || !staged_targets.defined()) {
-                        return std::nullopt;
-                    }
-
-                    StreamingBatch batch{};
-                    batch.inputs = std::move(staged_inputs);
-                    batch.targets = std::move(staged_targets);
-                    return batch;
-                };
-
-                auto consume_batch = [&](torch::Tensor prediction, StreamingBatch batch) {
-                    if (!prediction.defined() || !batch.targets.defined()) {
-                        return;
-                    }
-
-                    auto staged_targets = std::move(batch.targets);
-                    const auto current_batch = staged_targets.size(0);
-                    if (current_batch <= 0) {
-                        return;
-                    }
-
-
-                    if (!prediction.sizes().equals(staged_targets.sizes())) {
-                        if (staged_targets.numel() == prediction.numel()) {
-                            staged_targets = staged_targets.reshape_as(prediction);
-                        }
-                    }
-
-                    auto loss = model.compute_loss(prediction, staged_targets);
-                    if (loss.dim() != 0) {
-                        loss = loss.mean();
-                    }
-                    if (regularization_active) {
-                        auto regularization_penalty = model.compute_regularization_penalty();
-                        if (regularization_penalty.defined()) {
-                            if (regularization_penalty.device() != loss.device()) {
-                                regularization_penalty = regularization_penalty.to(loss.device());
-                            }
-                            if (regularization_penalty.scalar_type() != loss.scalar_type()) {
-                                regularization_penalty = regularization_penalty.to(loss.scalar_type());
-                            }
-                            loss = loss + regularization_penalty;
-                        }
-                    }
-
-                    accumulation_val += loss.detach().item<double>() * static_cast<double>(current_batch);
-                    weight += current_batch;
-                };
-
-
-                StreamingOptions streaming_options{};
-                streaming_options.batch_size = static_cast<std::size_t>(batch_size);
-
-                if constexpr (BufferVRAM) {
-                    const std::size_t max_batches = total_batches == 0 ? 1 : total_batches;
-                    streaming_options.buffer_batches = std::max<std::size_t>(
-                        std::size_t{1}, std::min<std::size_t>(buffer_vram + 1, max_batches));
-                }
-                model.stream_forward(std::move(dataset_inputs),
-                                     std::move(dataset_targets),
-                                     streaming_options,
-                                     prepare_batch,
-                                     consume_batch);
-                if (was_training) {
-                    model.train();
-                } else {
-                    model.eval();
-                }
-
-                if (weight == 0) {
-                    return std::nullopt;
-                }
-
-                auto averaged_loss_tensor = torch::tensor(accumulation_val / static_cast<double>(weight), torch::TensorOptions().dtype(torch::kFloat64));
-                const torch::Device cpu_device{torch::kCPU};
-                auto loss_scalar = TrainingTelemetry::DeferredScalar::from_tensor(std::move(averaged_loss_tensor), cpu_device);
-                auto learning_rates = model.collect_learning_rates();
-                const auto timestamp = std::chrono::system_clock::now();
-                model.record_dataset_loss_telemetry({
-                    loss_scalar,
-                    static_cast<std::size_t>(dataset.inputs.size(0)),
-                    std::move(learning_rates),
-                    timestamp
-                });
-
-                return loss_scalar;
             }
 
             static void log_epoch(std::ostream &stream,

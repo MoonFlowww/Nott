@@ -82,7 +82,9 @@ namespace Nott::Layer::Details {
             using namespace torch::nn::functional;
             InterpolateFuncOptions opts;
             opts = opts.mode(to_interpolate_mode(options_.mode));
-            opts = opts.align_corners(options_.align_corners);
+            if (options_.mode != UpsampleMode::Nearest) {
+                opts = opts.align_corners(options_.align_corners);
+            }
             opts = opts.recompute_scale_factor(options_.recompute_scale_factor);
             opts = opts.scale_factor(options_.scale);
             return interpolate(std::move(input), opts);
@@ -115,7 +117,9 @@ namespace Nott::Layer::Details {
             using namespace torch::nn::functional;
             InterpolateFuncOptions opts;
             opts = opts.mode(to_interpolate_mode(options_.mode));
-            opts = opts.align_corners(options_.align_corners);
+            if (options_.mode != DownsampleMode::Nearest) {
+                opts = opts.align_corners(options_.align_corners);
+            }
             opts = opts.recompute_scale_factor(options_.recompute_scale_factor);
             opts = opts.scale_factor(compute_scale_factors());
             return interpolate(std::move(input), opts);
