@@ -69,7 +69,7 @@ deterministic by accepting optional seeds where appropriate.
 - **`Cutout`** – Stochastically masks rectangular patches, either with random
   noise or a constant fill value, and concatenates the augmented samples to the
   original batch.
-  - **`AtmosphericDrift`** – Injects height-dependent haze gradients with a user
+- **`AtmosphericDrift`** – Injects height-dependent haze gradients with a user
   supplied atmospheric color. `strength`, `drift`, and optional `frequency`
   fields control how pronounced the effect is and how often it is applied to the
   batch.
