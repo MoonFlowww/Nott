@@ -1,6 +1,7 @@
 #ifndef LIBNott_TERMINAL_HPP
 #define LIBNott_TERMINAL_HPP
 
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -260,21 +261,22 @@ namespace Nott::Utils::Terminal {
 
 
 
-    namespace Nott::Plot::Details::Reliability::detail {
-        inline auto PickColor(std::size_t index) -> std::string
-        {
-            static constexpr std::array<const char*, 8> palette{
-                "#1f77b4",
-                "#ff7f0e",
-                "#2ca02c",
-                "#d62728",
-                "#9467bd",
-                "#8c564b",
-                "#e377c2",
-                "#7f7f7f"
-            };
-            return std::string(palette[index % palette.size()]);
-        }
+}
+
+namespace Nott::Plot::Details::Reliability::detail {
+    inline auto PickColor(std::size_t index) -> std::string
+    {
+        static constexpr std::array<const char*, 8> palette{
+            "#1f77b4",
+            "#ff7f0e",
+            "#2ca02c",
+            "#d62728",
+            "#9467bd",
+            "#8c564b",
+            "#e377c2",
+            "#7f7f7f"
+        };
+        return std::string(palette[index % palette.size()]);
     }
 }
 

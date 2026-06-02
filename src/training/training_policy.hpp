@@ -32,6 +32,7 @@ struct TrainingPolicy {
     bool         restore_best_state{false};
     std::ostream* stream{nullptr};
     bool         fold{false};
+    bool         drop_last{false};
 
     [[nodiscard]] bool use_buffer()   const noexcept { return buffer_vram > 0 && is_cuda; }
     [[nodiscard]] bool use_prefetch() const noexcept { return prefetch_available && is_cuda; }
@@ -72,6 +73,7 @@ inline TrainingPolicy make_training_policy(
     p.restore_best_state    = opts.restore_best_state;
     p.stream                = opts.stream;
     p.fold                  = opts.fold;
+    p.drop_last             = opts.drop_last;
     return p;
 }
 

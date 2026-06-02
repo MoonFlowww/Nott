@@ -19,7 +19,7 @@
  *    stay in regular functions for readability.
  *  - Expose helper APIs to retrieve training, evaluation, calibration and
  *    monitoring routines pre-bound to the compile-time configuration.
- */
+*/
 #include <iostream>
 #include <algorithm>
 #include <array>
@@ -161,6 +161,7 @@ namespace Nott {
         std::ostream *stream{&std::cout};
         std::size_t buffer_vram{Core::kDefaultTrainingConfig.buffer_vram};
         GraphMode graph_mode{GraphMode::Disabled};
+        bool drop_last{false};  // when true, silently skips incomplete final batch each epoch
         /// Enable CUDA graph capture/replay; pad or drop remainder batches first.
         bool enable_amp{false}; // Enable TensorCores
         torch::MemoryFormat memory_format{torch::MemoryFormat::Contiguous};
@@ -1877,6 +1878,7 @@ namespace Nott {
 
 
             auto apply_calibrations = [&](torch::Tensor value) {
+                if (calibration_methods_.empty()) return value;
                 ensure_graph_calibration_metadata_capacity(graph_mode);
 
                 for (std::size_t index = 0; index < calibration_methods_.size(); ++index) {
@@ -2609,6 +2611,11 @@ namespace Nott {
 
             /// Resolve graph mode once before the loop
             const auto req_graph_mode   = effective_options.graph_mode;
+            // Auto-enable capture for sequential models: links() sets routing_active_ for
+            // multi-IO topologies; sequential models are equally static and don't need it.
+            if (req_graph_mode != GraphMode::Disabled && !layers_.empty() && !graph_capture_opt_in_) {
+                graph_capture_opt_in_ = true;
+            }
             const bool graph_active     = graph_execution_enabled(req_graph_mode, GraphExecutionPhase::Training);
             const GraphMode eff_graph   = graph_active ? req_graph_mode : GraphMode::Disabled;
             const bool graph_enabled    = eff_graph != GraphMode::Disabled;
@@ -2652,11 +2659,18 @@ namespace Nott {
             {
                 if (graph_enabled &&
                     static_cast<std::size_t>(inputs.size(0)) != policy.batch_size) {
+                    if (policy.drop_last) {
+                        // Silently skip the incomplete final batch — graph replay requires
+                        // a fixed batch size and cannot handle the remainder.
+                        return torch::zeros({}, torch::TensorOptions()
+                            .dtype(torch::kFloat32).device(inputs.device()));
+                    }
                     throw std::invalid_argument(
                         "Graph optimisation requires every batch to match the captured batch "
                         "size (" + std::to_string(policy.batch_size) + "). Received "
                         + std::to_string(inputs.size(0))
-                        + " samples; pad or drop the remainder before enabling graph replay.");
+                        + " samples; set drop_last=true or use a batch size that divides "
+                        "the dataset evenly.");
                 }
 
                 if (graph_coord.requested != GraphMode::Capture) {
@@ -2711,7 +2725,7 @@ namespace Nott {
 
                 record_epoch_telemetry({
                     entry.epoch_index,
-                    wrap_double(entry.train_loss),
+                    entry.train_loss,        // already a DeferredScalar — no extra wrap
                     std::move(deferred_test),
                     entry.delta,
                     std::move(lrs),
@@ -2725,7 +2739,7 @@ namespace Nott {
                         *effective_options.stream,
                         entry.epoch_index,
                         effective_options.epoch,
-                        entry.train_loss,
+                        entry.train_loss.materialize(), // resolves lazily; transfer likely done
                         entry.test_loss,
                         entry.delta,
                         entry.improved,
@@ -3247,6 +3261,18 @@ namespace Nott {
                 return tensor;
             }
 
+            // Fast path: already on target device with the expected memory format, no observer.
+            if (!staging_observer_ && tensor.device() == device_) {
+                const bool ok =
+                    (tensor_memory_format_ == torch::MemoryFormat::Contiguous &&
+                     tensor.is_contiguous()) ||
+                    (tensor_memory_format_ == torch::MemoryFormat::ChannelsLast &&
+                     tensor.is_contiguous(torch::MemoryFormat::ChannelsLast)) ||
+                    (tensor_memory_format_ == torch::MemoryFormat::ChannelsLast3d &&
+                     tensor.is_contiguous(torch::MemoryFormat::ChannelsLast3d));
+                if (ok) return tensor;
+            }
+
             tensor = ensure_input_memory_format(std::move(tensor));
 
             if (tensor.device().is_cpu() && device_.is_cuda() && !tensor.is_pinned()) {
@@ -3438,7 +3464,12 @@ namespace Nott {
             if (mode == GraphMode::Disabled) {
                 return false;
             }
-            if (!graph_capture_opt_in_ || !routing_active_) {
+            if (!graph_capture_opt_in_) {
+                return false;
+            }
+            // routing_active_ is set by links() for multi-IO models; sequential models
+            // (layers_ non-empty) are also static and can be captured without explicit links.
+            if (!routing_active_ && layers_.empty()) {
                 return false;
             }
             if (!device_.is_cuda()) {
@@ -3726,6 +3757,20 @@ namespace Nott {
     private:
         torch::Tensor graph_train_step_impl(torch::Tensor batch_inputs, torch::Tensor batch_targets,
                                             GraphMode graph_mode, bool regularization_active, bool amp_enabled) {
+            // Fast path: no graph, no AMP, no regularisation — skip all graph/scaler setup.
+#ifdef TORCH_CUDA_AVAILABLE
+            if (graph_mode == GraphMode::Disabled && !amp_enabled && !regularization_active) {
+                auto prediction = execute_plan(std::move(batch_inputs), GraphMode::Disabled);
+                auto loss = compute_loss(prediction, batch_targets);
+                if (loss.dim() != 0) loss = loss.mean();
+                loss.backward();
+                step_optimizers();
+                zero_grad();
+                loss.detach_();
+                return loss;
+            }
+#endif
+
             const auto phase = GraphExecutionPhase::Training;
             if (!graph_execution_enabled(graph_mode, phase)) {
                 graph_mode = GraphMode::Disabled;

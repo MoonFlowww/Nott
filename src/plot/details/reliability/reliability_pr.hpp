@@ -120,7 +120,7 @@ namespace Nott::Plot::Details::Reliability {
                 style.lineWidth = 2.0;
                 style.pointType = 7;
                 style.pointSize = 1.1;
-                style.lineColor = Utils::Terminal::Nott::Plot::Details::Reliability::detail::PickColor(index);
+                style.lineColor = detail::PickColor(index);
 
                 datasets.push_back(Utils::Gnuplot::DataSet2D{
                     std::move(recallValues),

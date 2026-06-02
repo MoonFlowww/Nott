@@ -111,7 +111,7 @@ target_link_libraries(Nott "${TORCH_LIBRARIES}" Boost::filesystem ${OpenCV_LIBS}
 target_include_directories(Nott PUBLIC ${CMAKE_SOURCE_DIR}/include ${TORCH_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
 
 # ---- Examples ------------------------------------------------------------
-add_executable(example_Nott examples/regression/timeseries/etth.cpp
+add_executable(example_Nott examples/speedtest.cpp
     src/block/details/blocks/residual.hpp
     src/block/details/blocks/sequential.hpp
     src/lrscheduler/details/common.hpp

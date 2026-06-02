@@ -16,20 +16,34 @@ namespace Nott::Loss::Details {
 
     struct CrossEntropyDescriptor {
         CrossEntropyOptions options{};
+
+        // Pre-built options for the no-weight case — avoids reconstruction every step.
+        mutable std::optional<torch::nn::functional::CrossEntropyFuncOptions> cached_opts{};
+
+        [[nodiscard]] const torch::nn::functional::CrossEntropyFuncOptions& base_opts() const {
+            if (!cached_opts) {
+                auto opts = torch::nn::functional::CrossEntropyFuncOptions{};
+                opts = opts.reduction(to_torch_reduction<torch::nn::functional::CrossEntropyFuncOptions>(options.reduction));
+                opts = opts.label_smoothing(options.label_smoothing);
+                cached_opts = std::move(opts);
+            }
+            return *cached_opts;
+        }
     };
 
     inline torch::Tensor compute(const CrossEntropyDescriptor& descriptor,
                                  const torch::Tensor& prediction,
                                  const torch::Tensor& target,
                                  const std::optional<torch::Tensor>& weight = std::nullopt) {
-        auto opts = torch::nn::functional::CrossEntropyFuncOptions{};
-        opts = opts.reduction(to_torch_reduction<torch::nn::functional::CrossEntropyFuncOptions>(descriptor.options.reduction));
-        opts = opts.label_smoothing(descriptor.options.label_smoothing);
+        if (descriptor.options.weight.empty() && !weight.has_value()) {
+            return torch::nn::functional::cross_entropy(prediction, target, descriptor.base_opts());
+        }
+
+        auto opts = descriptor.base_opts();
         if (!descriptor.options.weight.empty()) {
-            auto weight_tensor = torch::tensor(
+            opts = opts.weight(torch::tensor(
                 descriptor.options.weight,
-                torch::TensorOptions().dtype(prediction.scalar_type()).device(prediction.device()));
-            opts = opts.weight(weight_tensor);
+                torch::TensorOptions().dtype(prediction.scalar_type()).device(prediction.device())));
         } else if (weight.has_value() && weight->defined()) {
             opts = opts.weight(weight->to(prediction.device(), prediction.scalar_type()));
         }

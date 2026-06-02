@@ -23,6 +23,7 @@
 #include "training_policy.hpp"
 #include "dataset_pipeline.hpp"
 #include "batch_iterator.hpp"
+#include "deferred_scalar.hpp"
 
 namespace Nott::Training {
 
@@ -36,7 +37,7 @@ namespace Nott::Training {
 struct EpochLogEntry {
     std::size_t  epoch_index{};
     std::size_t  total_epochs{};
-    double       train_loss{0.0};
+    DeferredScalar train_loss{};      // non-blocking: resolved after on_epoch_end returns
     std::optional<double> test_loss{};
     std::optional<double> delta{};
     bool         improved{false};
@@ -99,9 +100,9 @@ void run_epochs(
                 : torch::arange(total_samples, index_opts);
         }
 
-        /// Accumulate on device, no per-batch CPU sync.
+        /// Accumulate on device in float32 (1 kernel/step), cast once at epoch end.
         torch::Tensor accumulation = torch::zeros({},
-            torch::TensorOptions().dtype(torch::kFloat64).device(device));
+            torch::TensorOptions().dtype(torch::kFloat32).device(device));
         std::int64_t total_weight  = 0;
         std::size_t  processed     = 0;
 
@@ -118,7 +119,7 @@ void run_epochs(
             ++global_step_index;
             ++processed;
 
-            accumulation += loss.detach().to(torch::kFloat64) * static_cast<double>(n);
+            accumulation.add_(loss.detach().to(torch::kFloat32), static_cast<float>(n));
             total_weight += n;
         };
 
@@ -130,13 +131,18 @@ void run_epochs(
 #endif
         );
 
-        /// Materialise train loss (one GPU sync per epoch)
-        double train_loss_val = 0.0;
-        if (total_weight > 0)
-            train_loss_val = (accumulation / static_cast<double>(total_weight))
-                             .item<double>();
+        /// Issue non-blocking H2D copy of train loss — no GPU sync on the hot path.
+        DeferredScalar deferred_train_loss{};
+        if (total_weight > 0) {
+            auto normalized = accumulation.to(torch::kFloat64) / static_cast<double>(total_weight);
+            deferred_train_loss = DeferredScalar::from_tensor(std::move(normalized), device);
+        }
 
-        /// Test evaluation
+        /// Stop epoch timer BEFORE any GPU sync or test evaluation.
+        const double duration = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - epoch_start).count();
+
+        /// Test evaluation (synchronous — needed for best-state tracking)
         std::optional<double> test_loss{};
         if (test_dataset)
             test_loss = compute_test_loss(model, *test_dataset, policy);
@@ -171,14 +177,10 @@ void run_epochs(
             best_state_captured = true;
         }
 
-        /// Epoch-end callback
-        const double duration = std::chrono::duration<double>(
-            std::chrono::steady_clock::now() - epoch_start).count();
-
         on_epoch_end(EpochLogEntry{
             epoch + 1,
             policy.epochs,
-            train_loss_val,
+            std::move(deferred_train_loss),
             test_loss,
             delta,
             improved,
