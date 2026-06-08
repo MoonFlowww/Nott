@@ -1,6 +1,7 @@
 # Nott
 ![GitHub last commit](https://img.shields.io/github/last-commit/MoonFlowww/Nott?logo=github)
 ![Unique Cloners](https://img.shields.io/badge/Unique_Cloners-137-blue?logo=github)
+
 Nott is a modern C++ deep-learning framework that layers a strongly typed API over LibTorch. It prioritizes reproducibility, predictable latency, and explicit control over kernels, memory, and optimizer state.
 ## Why Nott?
 * **First-class graph authoring.** Layers and higher-order blocks can be connected as a DAG, letting you express anything from small CNNs to large transformer stacks without wrestling with manual tensor plumbing.
