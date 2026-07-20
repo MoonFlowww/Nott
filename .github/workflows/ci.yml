@@ -28,17 +28,18 @@ jobs:
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
-      # Compiling every example exercises nearly the whole public API surface
+      # Compiling the examples exercises nearly the whole public API surface
       # (every layer/optimizer/loss/activation type is #included by one of
       # them) without needing a dedicated smoke-test harness. Most examples
       # load datasets from hardcoded local paths, so we only compile them here.
       # example_ntk is excluded: it currently fails to compile (ambiguous
       # c10::impl::to_string), a pre-existing issue unrelated to this CI setup.
-      - name: Compile all examples
+      # example_overhead and example_speedtest are excluded: benchmarks, not
+      # useful as a CI compile check.
+      - name: Compile examples
         run: >
           cmake --build build -j"$(nproc)" --target
-          example_overhead example_cifar10
-          example_dubai_segment example_ptbxl example_etth example_speedtest
+          example_cifar10 example_dubai_segment example_ptbxl example_etth
 
       # Real assertions against the API: activations, losses, initializers,
       # regularizers, optimizers, layers, blocks, and a full train+evaluate
