@@ -38,7 +38,6 @@ cmake --build build --target example_etth example_ptbxl   # multiple at once
 
 | Target | Source | What it demonstrates |
 | --- | --- | --- |
-| `example_ntk` | `examples/analysis/ntk.cpp` | Neural tangent kernel analysis on a synthetic spiral dataset |
 | `example_overhead` | `examples/analysis/overhead.cpp` | Minimal CNN on MNIST, used to measure Nott's overhead vs. raw LibTorch |
 | `example_cifar10` | `examples/classification/images/cifar10.cpp` | CIFAR-10 image classification with a Vision Transformer backbone |
 | `example_dubai_segment` | `examples/classification/masks/dubai_segment.cpp` | Semantic segmentation on the Dubai aerial imagery dataset (uses OpenCV directly) |
