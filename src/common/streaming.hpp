@@ -178,7 +178,8 @@ namespace Nott {
         }
 #endif
 
-        pinned.tensor = tensor.pin_memory();
+        // only reached with no usable GPU: pinning impossible (CPU build) or pointless.
+        pinned.tensor = std::move(tensor);
         return pinned;
     }
 
