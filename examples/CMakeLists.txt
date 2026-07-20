@@ -5,7 +5,6 @@
 #   cmake --build . --target example_cifar10
 #   cmake --build . --target example_etth example_ptbxl
 set(NOTT_EXAMPLES
-    example_ntk           analysis/ntk.cpp
     example_overhead      analysis/overhead.cpp
     example_cifar10       classification/images/cifar10.cpp
     example_dubai_segment classification/masks/dubai_segment.cpp
