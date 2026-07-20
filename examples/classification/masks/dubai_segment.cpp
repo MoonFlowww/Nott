@@ -1102,7 +1102,7 @@ namespace {
     }
 }
 
-int _main() {
+int main() {
     Nott::Model model("");
     std::vector<torch::Tensor> xs;
     std::vector<torch::Tensor> ys;

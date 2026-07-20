@@ -3,11 +3,40 @@
 ![Unique Cloners](https://img.shields.io/badge/Unique_Cloners-189-blue?logo=github)
 
 Nott is a modern C++ deep-learning framework that layers a strongly typed API over LibTorch. It prioritizes reproducibility, predictable latency, and explicit control over kernels, memory, and optimizer state.
+
+## Scope at a glance
+Nott isn't a thin wrapper with a handful of layers and optimizers, the catalog is deliberately broad:
+
+| Category | Count | Examples |
+| --- | --- | --- |
+| Transformer architectures | 10 | Classic, Vision (ViT), BERT, Mamba, Titans, Atlas, Energy-Based Transformer, Perceiver, Longformer-XL, ++ |
+| Layers | 24 | FC, Conv1d/2d, BatchNorm2d, 8 pooling variants, RNN/LSTM/GRU/xLSTM, S4, PatchUnembed, Reduce, Up/Downsample |
+| Optimizers | 13 | SGD, RMSprop, Adagrad, Adam, AdamW, Lion, LAMB, Adafactor, SophiaG/H, Muon, AdaMuon, MuonManifold |
+| Regularizers | 26 | L1/L2/ElasticNet, GroupLasso, Spectral/NuclearNorm, Orthogonality, EWC, SI, MAS, VAT, TRADES, WGAN-GP, SWA/SWAG, FGE/SFGE |
+| Loss functions | 12 | MSE, CrossEntropy, BCE, NLL, MAE, SmoothL1, KLDiv, CosineEmbedding, MarginRanking, Dice, Tversky, Lovász-Softmax |
+| Activations | 14 | ReLU, Sigmoid, Tanh, LeakyReLU, Softmax, SiLU, GeLU, GLU, SwiGLU, dSiLU, PSiLU, Mish, Swish |
+| Weight initializations | 8 | XavierNormal/Uniform, HeNormal/Uniform, Dirac, Lyapunov, ZeroBias, Default |
+| Dataset loaders | 4 named + 1 universal | MNIST, CIFAR10, ETTh, PTB-XL, plus a descriptor-driven loader spanning CSV/text/binary and 7 image formats |
+| Data augmentations | 10 | Flip, Cutout, CLAHE, GridDistortion, OpticalDistortion, ChromaticAberration, CloudOcclusion, AtmosphericDrift, SunAngleJitter, RandomBrightnessContrast |
+| Evaluation metrics | 109 | 55 classification (Accuracy, F1, AUCROC, Matthews, Informedness, calibration metrics like ECE/Brier) + 54 timeseries (RMSE, MASE, DTW, CRPS, QLIKE, Ljung-Box, ...) |
+
+* **Multi Optimizers/Regularizations**: Any layer/block can override the model-wide optimizer with its own via `LocalConfig`; all of them zero-grad and step together each iteration
+* **Non-sequential topology**: `Model::links()` rewires the forward graph with skip/merge joins (elementwise sum or concat), enabling U-Net- and DLA-style encoder-decoder and multi-branch topologies, not just linear stacks 
+
+Counts reflect the current source tree and will drift as the framework grows; browse [`src/`](../src) for the up-to-date list.
+
 ## Why Nott?
 * **First-class graph authoring.** Layers and higher-order blocks can be connected as a DAG, letting you express anything from small CNNs to large transformer stacks without wrestling with manual tensor plumbing.
 * **Consistent systems model.** Data loaders, augmentations, optimizers, regularizers, and metrics share the same descriptor-driven style so you can mix-and-match building blocks safely.
 * **Native performance.** Nott keeps you close to the metal through LibTorch while still providing ergonomic abstractions. Benchmarks at the end of this document detail the runtime overhead compared to pure LibTorch.
 * **Not just LibTorch wrappers.** The API covers extensive layer catalogs, attention descriptors, data loaders, and training utilities rather than exposing only a handful of LibTorch layers.
+## Building
+Nott is header-only; the CMake project resolves LibTorch/Boost/OpenCV once and exposes one executable target per file under [`examples/`](../examples). None of the examples build by default — building all of them unconditionally can take the better part of an hour, so name the one(s) you want:
+```bash
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --target example_cifar10
+```
+Full prerequisites, the target list, and integration instructions live in [Docs/Build](sub/build/README.md).
 ## Quick Start
 ```cpp
 #include <Nott>
