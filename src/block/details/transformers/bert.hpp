@@ -268,18 +268,20 @@ namespace Nott::Block::Details::Transformer::Bert {
                 auto residual = sequence;
                 auto attn_input = options_.pre_norm ? norm1_->forward(sequence) : sequence;
 
-                c10::optional<torch::Tensor> attention_mask{};
-                if (attn_mask.defined()) {
-                    attention_mask = attn_mask;
-                }
-
-                c10::optional<torch::Tensor> padding_mask{};
-                if (key_padding_mask.defined()) {
-                    padding_mask = key_padding_mask;
-                }
-
-                auto attention = attention_->forward(attn_input, attn_input, attn_input, padding_mask.value(), true, attention_mask.value());
-                auto attn_output = std::get<0>(attention);
+                // torch::nn::MultiheadAttentionImpl::forward takes plain (possibly
+                // undefined) Tensors for key_padding_mask/attn_mask, not
+                // optional<Tensor> -- wrapping them in c10::optional and then
+                // unconditionally calling .value() threw bad_optional_access whenever no
+                // mask was supplied (the common/default case).
+                //
+                // torch::nn::MultiheadAttentionImpl has no batch_first option and always
+                // expects [seq, batch, embed]; attn_input here is batch-first [batch, seq,
+                // embed] like the rest of this file. Without transposing in and back out,
+                // batch and sequence silently swap roles inside attention.
+                auto attn_input_seq_first = attn_input.transpose(0, 1);
+                auto attention = attention_->forward(
+                    attn_input_seq_first, attn_input_seq_first, attn_input_seq_first, key_padding_mask, true, attn_mask);
+                auto attn_output = std::get<0>(attention).transpose(0, 1);
 
                 if (attention_dropout_) {
                     attn_output = attention_dropout_->forward(attn_output);

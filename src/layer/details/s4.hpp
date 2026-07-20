@@ -332,7 +332,10 @@ namespace Nott::Layer::Details {
                 auto eigenvalues = std::get<0>(eigen);
                 auto eigenvectors = std::get<1>(eigen);
                 auto V_inv = torch::linalg_inv(eigenvectors);
-                auto B_transformed = torch::matmul(V_inv, B.unsqueeze(-1)).squeeze(-1);
+                // linalg_eig on a real matrix returns complex eigenvectors, so V_inv is
+                // complex while B is still real; matmul (unlike .to()) doesn't promote
+                // real -> complex automatically, so B must be cast explicitly first.
+                auto B_transformed = torch::matmul(V_inv, B.to(V_inv.scalar_type()).unsqueeze(-1)).squeeze(-1);
                 lambda_values = eigenvalues;
                 B_base = B_transformed;
             } else {

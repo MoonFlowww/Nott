@@ -1,0 +1,50 @@
+name: build
+
+on: [push, pull_request]
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Cache LibTorch
+        id: cache-libtorch
+        uses: actions/cache@v4
+        with:
+          path: /opt/libtorch
+          key: libtorch-cpu-2.4.0
+
+      - name: Install LibTorch
+        if: steps.cache-libtorch.outputs.cache-hit != 'true'
+        run: |
+          curl -sL https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.4.0%2Bcpu.zip -o libtorch.zip
+          sudo unzip -q libtorch.zip -d /opt
+          rm libtorch.zip
+
+      - name: Install Boost + OpenCV
+        run: sudo apt-get update && sudo apt-get install -y libboost-filesystem-dev libopencv-dev
+
+      - name: Configure
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+
+      # Compiling every example exercises nearly the whole public API surface
+      # (every layer/optimizer/loss/activation type is #included by one of
+      # them) without needing a dedicated smoke-test harness. Most examples
+      # load datasets from hardcoded local paths, so we only compile them here.
+      # example_ntk is excluded: it currently fails to compile (ambiguous
+      # c10::impl::to_string), a pre-existing issue unrelated to this CI setup.
+      - name: Compile all examples
+        run: >
+          cmake --build build -j"$(nproc)" --target
+          example_overhead example_cifar10
+          example_dubai_segment example_ptbxl example_etth example_speedtest
+
+      # Real assertions against the API: activations, losses, initializers,
+      # regularizers, optimizers, layers, blocks, and a full train+evaluate
+      # loop exercising every classification/timeseries metric.
+      - name: Build test suite
+        run: cmake --build build -j"$(nproc)" --target nott_tests
+
+      - name: Run test suite
+        run: ctest --test-dir build --output-on-failure

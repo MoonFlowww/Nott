@@ -353,14 +353,19 @@ namespace Nott::Block::Details::Transformer::Vision {
                     if (key_padding_mask.defined()) {
                         padding_mask = key_padding_mask;
                     }
+                    // torch::nn::MultiheadAttentionImpl has no batch_first option and
+                    // always expects [seq, batch, embed]; attn_input here is batch-first
+                    // [batch, seq, embed]. Without transposing in and back out, batch and
+                    // sequence silently swap roles inside attention instead of crashing.
+                    auto attn_input_seq_first = attn_input.transpose(0, 1);
                     auto attention = attention_->forward(
-                        attn_input,
-                        attn_input,
-                        attn_input,
+                        attn_input_seq_first,
+                        attn_input_seq_first,
+                        attn_input_seq_first,
                         padding_mask.value_or(torch::Tensor{}), // optional
                         true,
                         attention_mask.value_or(torch::Tensor{})); // optional
-                        attn_output = std::get<0>(attention);
+                        attn_output = std::get<0>(attention).transpose(0, 1);
 
                 } else {
                     if (height <= 0 || width <= 0) {
@@ -372,8 +377,10 @@ namespace Nott::Block::Details::Transformer::Vision {
                         tokens_2d = tokens_2d.roll({-shift, -shift}, {1, 2});
                     }
                     auto windows = window_partition(tokens_2d, descriptor_.window.size);
-                    auto attention = attention_->forward(windows, windows, windows);
-                    auto windows_out = std::get<0>(attention);
+                    // Same batch-first vs. seq-first mismatch as the ViT branch above.
+                    auto windows_seq_first = windows.transpose(0, 1);
+                    auto attention = attention_->forward(windows_seq_first, windows_seq_first, windows_seq_first);
+                    auto windows_out = std::get<0>(attention).transpose(0, 1);
                     auto merged = window_reverse(windows_out, descriptor_.window.size, height, width);
                     if (descriptor_.window.shift) {
                         const auto shift = descriptor_.window.size / 2;

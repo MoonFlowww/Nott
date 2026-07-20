@@ -221,3 +221,9 @@ target_include_directories(Nott PUBLIC ${CMAKE_SOURCE_DIR}/include ${TORCH_INCLU
 # See examples/CMakeLists.txt for the full target list and
 # docs/sub/build/README.md for the build guide.
 add_subdirectory(examples)
+
+# ---- Tests --------------------------------------------------------------
+# EXCLUDE_FROM_ALL like the examples above; build/run explicitly:
+#   cmake --build . --target nott_tests && ctest --output-on-failure
+enable_testing()
+add_subdirectory(tests)

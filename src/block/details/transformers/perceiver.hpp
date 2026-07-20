@@ -215,9 +215,15 @@ namespace Nott::Block::Details::Transformer::Perceiver {
                 auto latents = latents_.unsqueeze(0).expand({batch, -1, -1}).clone();
                 auto encoded_data = input_projection_ ? input_projection_->forward(data) : data;
 
+                // torch::nn::MultiheadAttentionImpl has no batch_first option and always
+                // expects [seq, batch, embed]; latents/encoded_data here are batch-first
+                // [batch, seq, dim]. Without transposing in and back out, batch and
+                // sequence silently swap roles inside attention instead of crashing.
                 for (std::size_t repeat = 0; repeat < options_.repeats; ++repeat) {
-                    auto attn = cross_attention_->forward(latents, encoded_data, encoded_data);
-                    auto attn_output = std::get<0>(attn);
+                    auto latents_seq_first = latents.transpose(0, 1);
+                    auto encoded_data_seq_first = encoded_data.transpose(0, 1);
+                    auto attn = cross_attention_->forward(latents_seq_first, encoded_data_seq_first, encoded_data_seq_first);
+                    auto attn_output = std::get<0>(attn).transpose(0, 1);
                     if (attention_dropout_) {
                         attn_output = attention_dropout_->forward(attn_output);
                     }
@@ -229,8 +235,9 @@ namespace Nott::Block::Details::Transformer::Perceiver {
                     latents = latents + ff;
 
                     for (std::size_t layer = 0; layer < options_.self_layers; ++layer) {
-                        auto latent_attn = latent_attention_->forward(latents, latents, latents);
-                        auto latent_output = std::get<0>(latent_attn);
+                        auto latents_self_seq_first = latents.transpose(0, 1);
+                        auto latent_attn = latent_attention_->forward(latents_self_seq_first, latents_self_seq_first, latents_self_seq_first);
+                        auto latent_output = std::get<0>(latent_attn).transpose(0, 1);
                         if (attention_dropout_) {
                             latent_output = attention_dropout_->forward(latent_output);
                         }
