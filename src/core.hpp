@@ -3999,12 +3999,8 @@ namespace Nott {
           prepared_inputs = prepared_inputs.contiguous();
         }
         auto prepared_targets = std::move(targets).contiguous();
-        if (prepared_inputs.device().is_cpu() && !prepared_inputs.is_pinned()) {
-          prepared_inputs = prepared_inputs.pin_memory();
-        }
-        if (prepared_targets.device().is_cpu() && !prepared_targets.is_pinned()) {
-          prepared_targets = prepared_targets.pin_memory();
-        }
+        prepared_inputs = Nott::Training::ensure_pinned(std::move(prepared_inputs));
+        prepared_targets = Nott::Training::ensure_pinned(std::move(prepared_targets));
         return TensorDataset{std::move(prepared_inputs), std::move(prepared_targets)};
       }
 
@@ -4039,12 +4035,8 @@ namespace Nott {
         if (!dataset.targets.device().is_cpu()) {
           dataset.targets = dataset.targets.to(torch::kCPU);
         }
-        if (dataset.inputs.device().is_cpu() && !dataset.inputs.is_pinned()) {
-          dataset.inputs = dataset.inputs.pin_memory();
-        }
-        if (dataset.targets.device().is_cpu() && !dataset.targets.is_pinned()) {
-          dataset.targets = dataset.targets.pin_memory();
-        }
+        dataset.inputs = Nott::Training::ensure_pinned(std::move(dataset.inputs));
+        dataset.targets = Nott::Training::ensure_pinned(std::move(dataset.targets));
         return dataset;
       }
 

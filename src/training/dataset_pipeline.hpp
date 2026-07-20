@@ -63,8 +63,11 @@ namespace Nott::Training {
  * @return        Tensor with pinned memory if it was on CPU.
  */
 [[nodiscard]] inline torch::Tensor ensure_pinned(torch::Tensor tensor) {
-    if (tensor.defined() && tensor.device().is_cpu() && !tensor.is_pinned())
+#ifdef TORCH_CUDA_AVAILABLE
+    // ifdef: kernel compiled in. is_available: GPU actually present. Both needed.
+    if (torch::cuda::is_available() && tensor.defined() && tensor.device().is_cpu() && !tensor.is_pinned())
         tensor = tensor.pin_memory();
+#endif
     return tensor;
 }
 

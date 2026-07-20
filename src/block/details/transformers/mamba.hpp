@@ -268,15 +268,26 @@ namespace Nott::Block::Details::Transformer::Mamba {
 
                 std::vector<torch::Tensor> emissions(static_cast<std::size_t>(seq_len));
 
+                // Per-layer state is kept as separate tensors that get *rebound* each
+                // timestep, not written back into a shared `working_states` tensor via
+                // `working_states[layer] = hx` -- that desugars to an in-place copy_(),
+                // which corrupts the autograd graph: earlier timesteps' saved reads of
+                // `working_states` see their storage mutated by later timesteps' writes,
+                // so backward() fails with "modified by an inplace operation".
+                std::vector<torch::Tensor> layer_states(static_cast<std::size_t>(options_.ssm_layers));
+                for (std::int64_t layer = 0; layer < options_.ssm_layers; ++layer) {
+                    layer_states[static_cast<std::size_t>(layer)] = working_states[layer];
+                }
+
                 for (std::int64_t t = 0; t < seq_len; ++t) {
                     auto u = content.select(1, t);
                     auto next_input = u;
                     for (std::int64_t layer = 0; layer < options_.ssm_layers; ++layer) {
-                        auto hx = working_states[layer];
+                        auto hx = layer_states[static_cast<std::size_t>(layer)];
                         auto decay = torch::sigmoid(decay_linears_[static_cast<std::size_t>(layer)]->forward(next_input));
                         auto input_proj = torch::tanh(input_linears_[static_cast<std::size_t>(layer)]->forward(next_input));
                         hx = decay * hx + input_proj;
-                        working_states[layer] = hx;
+                        layer_states[static_cast<std::size_t>(layer)] = hx;
                         next_input = hx;
                     }
                     emissions[static_cast<std::size_t>(t)] = next_input;
@@ -293,7 +304,7 @@ namespace Nott::Block::Details::Transformer::Mamba {
                     output = output.transpose(0, 1);
                 }
 
-                new_state.ssm = std::move(working_states);
+                new_state.ssm = torch::stack(layer_states, 0);
                 if (!new_state.conv.defined() && options_.conv_kernel_size > 1) {
                     new_state.conv = torch::zeros({batch, inner_dim_, options_.conv_kernel_size - 1}, tensor.options());
                 }

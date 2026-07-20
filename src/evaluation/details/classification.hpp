@@ -743,6 +743,28 @@ namespace Nott::Evaluation::Details::Classification {
         std::vector<std::int64_t> class_labels;
         std::vector<std::vector<std::size_t>> confusion_matrix;
 
+        // Inferred once from the full target set (not per mini-batch, see process_batch
+        // below): a mini-batch can easily miss the highest-index class by chance, and
+        // slicing logits down to a per-batch-inferred class count silently corrupts
+        // metrics for that batch (or crashes Top-k metrics that need more columns than
+        // survived the slice). Computed here so every batch agrees on the same value.
+        std::optional<std::size_t> inferred_classes;
+        if (targets.defined() && targets.numel() > 0) {
+            if (targets.dim() > 1 && targets.size(1) > 1) {
+                inferred_classes = static_cast<std::size_t>(targets.size(1));
+            } else {
+                auto flattened = targets.reshape({-1});
+                if (flattened.dtype() != torch::kLong) {
+                    flattened = flattened.to(torch::kLong);
+                }
+
+                const auto max_label = flattened.max().item<long>();
+                if (max_label >= 0) {
+                    inferred_classes = static_cast<std::size_t>(max_label) + 1;
+                }
+            }
+        }
+
         std::vector<std::vector<std::size_t>> class_bin_counts;
         std::vector<std::vector<double>> class_bin_confidence;
         std::vector<std::vector<double>> class_bin_correct;
@@ -922,23 +944,7 @@ namespace Nott::Evaluation::Details::Classification {
                 segmentation_targets = target_cpu;
             }
 
-            std::optional<std::size_t> inferred_classes;
-            if (target_cpu.defined() && target_cpu.numel() > 0) {
-                if (target_cpu.dim() > 1 && target_cpu.size(1) > 1) {
-                    inferred_classes = static_cast<std::size_t>(target_cpu.size(1));
-                } else {
-                    auto flattened = target_cpu.reshape({-1});
-                    if (flattened.dtype() != torch::kLong) {
-                        flattened = flattened.to(torch::kLong);
-                    }
-
-                    const auto max_label = flattened.max().item<long>();
-                    if (max_label >= 0) {
-                        inferred_classes = static_cast<std::size_t>(max_label) + 1;
-                    }
-                }
-            }
-
+            // inferred_classes is computed once, dataset-wide, above process_batch.
 
             const std::size_t batch_classes = static_cast<std::size_t>(logits.size(1));
             const std::size_t current_batch = static_cast<std::size_t>(logits.size(0));

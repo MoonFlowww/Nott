@@ -739,14 +739,20 @@ namespace Nott::Block::Details::Transformer::PlusPlus {
                 auto output = residual + self_attention;
 
                 residual = output;
-                auto cross_input = norm2_->forward(output);
-                auto cross_attention = ::Nott::Attention::Details::forward_attention(cross_attention_, cross_input, memory, memory, memory_mask, memory_key_padding_mask);
-                if (cross_attention_dropout_.forward) {
-                    cross_attention = cross_attention_dropout_.forward(std::move(cross_attention));
-                    cross_attention = ::Nott::Activation::Details::apply(
-                        cross_attention_dropout_.activation, std::move(cross_attention));
+                // Mirrors classic.hpp's decoder: skip cross-attention entirely when there's
+                // no encoder memory (self-contained decoder-only usage, e.g. via
+                // Model::add() which always passes an empty memory tensor). Without this
+                // guard, forward_attention() was called on an undefined tensor and crashed.
+                if (memory.defined()) {
+                    auto cross_input = norm2_->forward(output);
+                    auto cross_attention = ::Nott::Attention::Details::forward_attention(cross_attention_, cross_input, memory, memory, memory_mask, memory_key_padding_mask);
+                    if (cross_attention_dropout_.forward) {
+                        cross_attention = cross_attention_dropout_.forward(std::move(cross_attention));
+                        cross_attention = ::Nott::Activation::Details::apply(
+                            cross_attention_dropout_.activation, std::move(cross_attention));
+                    }
+                    output = residual + cross_attention;
                 }
-                output = residual + cross_attention;
 
                 residual = output;
                 auto feed_forward = norm3_->forward(output);

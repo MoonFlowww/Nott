@@ -208,8 +208,24 @@ namespace Nott::Block::Details::Transformer::LongformerXL {
                     }
                 }
 
-                auto attention = attention_->forward(query, context, context, mask);
-                auto attn_output = std::get<0>(attention);
+                // `mask` is a [target_len, source_len] additive attention-bias mask, which
+                // belongs in the attn_mask slot (6th param). It was being passed as
+                // key_padding_mask (4th param, expects [batch, source_len]), tripping
+                // libtorch's internal key_padding_mask_.size(...) shape assertions.
+                //
+                // torch::nn::MultiheadAttentionImpl (unlike Python's nn.MultiheadAttention)
+                // has no batch_first option and always expects [seq, batch, embed]; every
+                // tensor around this call (query, context, the mask's own construction via
+                // cat(..., dim=1)) is batch-first [batch, seq, embed]. Without transposing
+                // in and back out, batch and sequence silently swap roles inside attention
+                // instead of crashing outright (this file's own AttentionOptions::batch_first
+                // was never actually applied here).
+                auto query_seq_first = query.transpose(0, 1);
+                auto context_seq_first = context.transpose(0, 1);
+                auto attention = attention_->forward(
+                    query_seq_first, context_seq_first, context_seq_first,
+                    /*key_padding_mask=*/{}, /*need_weights=*/true, /*attn_mask=*/mask);
+                auto attn_output = std::get<0>(attention).transpose(0, 1);
 
                 if (attention_dropout_) {
                     attn_output = attention_dropout_->forward(attn_output);

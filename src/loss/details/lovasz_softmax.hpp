@@ -21,7 +21,9 @@ namespace Nott::Loss::Details {
             auto jaccard = 1.0 - intersection / union_.clamp_min(1e-12);
 
             if (length > 1) {
-                auto jaccard_shifted = jaccard.narrow(0, 1, length - 1);
+                // narrow() returns a view: without the clone, this in-place subtract reads
+                // and writes overlapping memory (jaccard[1:] aliases jaccard[0:-1]).
+                auto jaccard_shifted = jaccard.narrow(0, 1, length - 1).clone();
                 jaccard_shifted -= jaccard.narrow(0, 0, length - 1);
                 jaccard.narrow(0, 1, length - 1).copy_(jaccard_shifted);
             }

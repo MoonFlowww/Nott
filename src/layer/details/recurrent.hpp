@@ -11,7 +11,11 @@
 #include <type_traits>
 
 #include <torch/torch.h>
-#include <ATen/cuda/CUDAContext.h>
+// NB: <torch/cuda.h> alone is enough for the torch::cuda::is_available()/
+// cudnn_is_available() runtime checks below and is safe in CPU-only LibTorch
+// builds. <ATen/cuda/CUDAContext.h> was included but never used, and requires
+// the full CUDA toolkit (cuda_runtime_api.h) to be installed -- breaking any
+// build (like CI) that only has LibTorch's CPU package.
 #include <torch/cuda.h>
 
 #include "../../activation/activation.hpp"
