@@ -9,7 +9,7 @@
 #include <torch/torch.h>
 
 #include "common.hpp"
-#include "../../../core.hpp"
+#include "../../../core/core.hpp"
 
 namespace Nott::Data::Transform::DimensionalityReduction {
     struct PCAResult {

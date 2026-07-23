@@ -12,7 +12,7 @@
 
 #include <torch/torch.h>
 
-#include "../../../core.hpp"
+#include "../../../core/core.hpp"
 
 namespace Nott::Plot::Details::Reliability::Curves {
     struct BinarySeries {

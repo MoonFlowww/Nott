@@ -29,7 +29,7 @@
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
 
-#include "../../core.hpp"
+#include "../../core/core.hpp"
 #include "types.hpp"
 #include "../transform/format/format.hpp"
 namespace Nott::Data::Load {

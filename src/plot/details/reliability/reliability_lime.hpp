@@ -17,7 +17,7 @@
 
 #include <torch/torch.h>
 
-#include "../../../core.hpp"
+#include "../../../core/core.hpp"
 #include "../../../utils/gnuplot.hpp"
 #include "reliability_curve_utils.hpp"
 

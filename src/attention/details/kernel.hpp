@@ -23,23 +23,34 @@ namespace Nott::Attention::Details {
                               const torch::Tensor& attn_mask = {},
                               const torch::Tensor& key_padding_mask = {})
         {
-            auto scores = torch::matmul(query, key.transpose(-2, -1));
-            const auto head_dim = query.size(-1);
-            const auto batch_size = scores.size(0);
-            const auto num_heads = scores.size(1);
-            const auto target_len = scores.size(2);
-            const auto source_len = scores.size(3);
-            if (head_dim > 0) {
-                scores = scores / std::sqrt(static_cast<double>(head_dim));
+            // no-mask fast path: skip building any mask tensor, let SDPA's is_causal do it
+            const bool has_key_padding_mask = key_padding_mask.defined() && key_padding_mask.numel() > 0;
+            const bool has_attn_mask = attn_mask.defined() && attn_mask.numel() > 0;
+            if (!has_key_padding_mask && !has_attn_mask) {
+                const double dropout_p = is_training() ? dropout_->options.p() : 0.0;
+                return at::scaled_dot_product_attention(
+                    query, key, value,
+                    /*attn_mask=*/std::nullopt,
+                    dropout_p,
+                    /*is_causal=*/variant_ == ::Nott::Attention::Variant::Causal);
             }
 
-            if (key_padding_mask.defined() && key_padding_mask.numel() > 0) {
+            // combined is additive (same convention this class's attn_mask already used, and
+            // what SDPA's float attn_mask expects), so key_padding_mask/causal fold into it
+            // instead of running the old eager matmul+softmax+matmul path.
+            const auto batch_size = query.size(0);
+            const auto num_heads = query.size(1);
+            const auto target_len = query.size(2);
+            const auto source_len = key.size(2);
+            auto combined = torch::zeros({batch_size, num_heads, target_len, source_len}, query.options());
+
+            if (has_key_padding_mask) {
                 auto mask = key_padding_mask.to(torch::kBool).unsqueeze(1).unsqueeze(2);
-                scores = scores.masked_fill(mask, -std::numeric_limits<float>::infinity());
+                combined = combined.masked_fill(mask, -std::numeric_limits<float>::infinity());
             }
 
-            if (attn_mask.defined() && attn_mask.numel() > 0) {
-auto mask = attn_mask;
+            if (has_attn_mask) {
+                auto mask = attn_mask;
 
                 const auto make_size_mismatch_error = [&](const std::string& reason) {
                     throw std::invalid_argument("Attention mask dimensions mismatch: " + reason +
@@ -79,20 +90,20 @@ auto mask = attn_mask;
                 default:
                     throw std::invalid_argument("Unsupported attention mask dimensionality: " + std::to_string(mask.dim()));
                 }
-                mask = mask.to(scores.dtype());
-                scores = scores + mask;
+                combined = combined + mask.to(combined.dtype());
             }
 
             if (variant_ == ::Nott::Attention::Variant::Causal) {
-                const auto seq_len = scores.size(-1);
-                const auto tgt_len = scores.size(-2);
-                auto causal_mask = torch::ones({tgt_len, seq_len}, scores.options().dtype(torch::kBool)).triu(1);
-                scores = scores.masked_fill(causal_mask.unsqueeze(0).unsqueeze(0), -std::numeric_limits<float>::infinity());
+                auto causal_mask = torch::ones({target_len, source_len}, combined.options().dtype(torch::kBool)).triu(1);
+                combined = combined.masked_fill(causal_mask.unsqueeze(0).unsqueeze(0), -std::numeric_limits<float>::infinity());
             }
 
-            auto attn = torch::softmax(scores, -1);
-            attn = dropout_->forward(attn);
-            return torch::matmul(attn, value);
+            const double dropout_p = is_training() ? dropout_->options.p() : 0.0;
+            return at::scaled_dot_product_attention(
+                query, key, value,
+                combined,
+                dropout_p,
+                /*is_causal=*/false);
         }
 
     private:

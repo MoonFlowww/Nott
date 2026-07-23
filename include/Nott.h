@@ -1,7 +1,7 @@
 #ifndef Nott_LIBRARY_H
 #define Nott_LIBRARY_H
 
-#include "../src/core.hpp"
+#include "../src/core/core.hpp"
 #include "../src/layer/layer.hpp"
 #include "../src/loss/loss.hpp"
 #include "../src/optimizer/optimizer.hpp"
