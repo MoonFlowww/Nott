@@ -70,7 +70,12 @@ add_library(Nott SHARED
     src/common/save_load.hpp
     src/common/streaming.hpp
     src/common/stresstest.hpp
-    src/core.hpp
+    src/core/core.hpp
+    src/core/details/graph_utils.hpp
+    src/core/details/graph_builder.hpp
+    src/core/details/train.hpp
+    src/core/details/executor.hpp
+    src/core/details/model_io.hpp
     src/data/data.hpp
     src/data/details/generation.hpp
     src/data/details/repair.hpp
@@ -201,7 +206,6 @@ add_library(Nott SHARED
     src/training/epoch_runner.hpp
     src/training/graph_coordinator.hpp
     src/training/kfold.hpp
-    src/training/step_executor.hpp
     src/training/training_policy.hpp
     src/training/training_preflight.hpp
     src/utils/gnuplot.hpp
