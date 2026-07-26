@@ -17,7 +17,7 @@ namespace Nott::Loss::Details {
     struct CrossEntropyDescriptor {
         CrossEntropyOptions options{};
 
-        // Pre-built options for the no-weight case — avoids reconstruction every step.
+        // Pre-built options for the no-weight case - avoids reconstruction every step.
         mutable std::optional<torch::nn::functional::CrossEntropyFuncOptions> cached_opts{};
 
         [[nodiscard]] const torch::nn::functional::CrossEntropyFuncOptions& base_opts() const {

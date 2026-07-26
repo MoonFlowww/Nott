@@ -2,11 +2,11 @@
  * @brief ETTh1 electricity transformer temperature forecasting with TCN backbone.
  *
  * Architecture:
- *   Conv1d stem (features → 64 → 128 → 256) with stride-2 downsampling
- *   → Residual Conv1d block (256→256→256) × 2 repeats
- *   → AdaptiveAvgPool1d(1) → Flatten
- *   → FC(256 → 128) + SiLU + HardDropout(0.15)
- *   → FC(128 → 1) regression head
+ *   Conv1d stem (features -> 64 -> 128 -> 256) with stride-2 downsampling
+ *   -> Residual Conv1d block (256->256->256) x 2 repeats
+ *   -> AdaptiveAvgPool1d(1) -> Flatten
+ *   -> FC(256 -> 128) + SiLU + HardDropout(0.15)
+ *   -> FC(128 -> 1) regression head
  *
  * Data preparation:
  *   - ETTh1 CSV loaded with 80/20 train/test split
@@ -61,7 +61,7 @@ int main() {
             throw std::runtime_error("Not enough timesteps for lookback window.");
         }
         const int64_t N = T - lookback;
-        // x_windows: (N, lookback, num_features) → reshape to (N, num_features, lookback) for Conv1d
+        // x_windows: (N, lookback, num_features) -> reshape to (N, num_features, lookback) for Conv1d
         auto x_win = torch::empty({N, num_features, lookback},
                                    x.options().dtype(torch::kFloat32));
         auto y_win = torch::empty({N}, y.options().dtype(torch::kFloat32));

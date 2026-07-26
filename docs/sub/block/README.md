@@ -15,7 +15,7 @@ between steps, matching `torch::nn::Sequential` semantics. You can pass either
 an `std::initializer_list` or `std::vector` of descriptors when constructing the
 block. Attach a `LocalConfig` to scope optimizers, losses, or regularisation to
 the entire block. This is a convenient way to fuse patterns such as
-`Conv2d → BatchNorm2d → Activation` while keeping a single local training scope.
+`Conv2d -> BatchNorm2d -> Activation` while keeping a single local training scope.
 
 Build a residual-flavoured sequential block and register it on a model with the following pattern:
 
@@ -74,11 +74,11 @@ Sequential blocks forward descriptors exactly once in declaration order. To loop
 
 `Block::Residual` composes skip-connected stacks. Key options include:
 
-- `layers` – ordered descriptors executed inside the residual branch.
-- `repeats` – number of times the branch is unrolled; must be positive.
-- `skip` – enable projection shortcuts via `use_projection` or supply a custom
+- `layers`, ordered descriptors executed inside the residual branch.
+- `repeats`, number of times the branch is unrolled; must be positive.
+- `skip`, enable projection shortcuts via `use_projection` or supply a custom
   layer descriptor. Projection layers also accept their own activation hooks.
-- `output` – configure the post-addition activation (`final_activation`) and
+- `output`, configure the post-addition activation (`final_activation`) and
   dropout probability applied after merging the skip connection.
 
 Residual blocks validate tensor shapes and throw descriptive errors when the
@@ -99,14 +99,14 @@ you. All transformers operate on sequences in `(batch, tokens, embed)` order.
 `Transformer::Classic::Encoder/Decoder` describe the canonical Vaswani-style
 architecture. Notable knobs:
 
-- `layers` – number of repeated blocks.
-- `embed_dim` – hidden width shared by attention heads and feed-forward layers.
-- `attention` – multi-head configuration (`num_heads`, `dropout`, `bias`,
+- `layers`, number of repeated blocks.
+- `embed_dim`, hidden width shared by attention heads and feed-forward layers.
+- `attention`, multi-head configuration (`num_heads`, `dropout`, `bias`,
   `variant`, `batch_first`).
-- `feed_forward` – two-layer MLP with `mlp_ratio`, `bias`, activation, and
+- `feed_forward`, two-layer MLP with `mlp_ratio`, `bias`, activation, and
   [Initialization](../initialization/README.md) choices.
-- `positional_encoding` – sinusoidal/learned positional encoders or a no-op.
-- `dropout` – residual dropout applied after each sublayer.
+- `positional_encoding`, sinusoidal/learned positional encoders or a no-op.
+- `dropout`, residual dropout applied after each sublayer.
 
 The decoder adds a cross-attention stack and mirrors the encoder feed-forward
 logic.

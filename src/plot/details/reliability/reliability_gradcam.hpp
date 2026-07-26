@@ -147,10 +147,10 @@ namespace Nott::Plot::Details::Reliability {
 
         inline auto ToTitles(std::size_t sample_index, bool overlay) -> std::vector<std::string> {
             std::vector<std::string> titles;
-            titles.emplace_back("Sample " + std::to_string(sample_index) + " – input");
-            titles.emplace_back("Sample " + std::to_string(sample_index) + " – Grad-CAM");
+            titles.emplace_back("Sample " + std::to_string(sample_index) + " - input");
+            titles.emplace_back("Sample " + std::to_string(sample_index) + " - Grad-CAM");
             if (overlay) {
-                titles.emplace_back("Sample " + std::to_string(sample_index) + " – overlay");
+                titles.emplace_back("Sample " + std::to_string(sample_index) + " - overlay");
             }
             return titles;
         }

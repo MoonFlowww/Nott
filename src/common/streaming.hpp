@@ -9,7 +9,7 @@
 #ifdef TORCH_CUDA_AVAILABLE
 #include <torch/cuda.h>
 #include <ATen/cuda/CUDAEvent.h>
-#include <ATen/cuda/CUDAStream.h>
+#include <c10/cuda/CUDAStream.h>
 #endif
 
 namespace Nott {

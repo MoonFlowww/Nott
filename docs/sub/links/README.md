@@ -26,7 +26,7 @@ vector of `LinkSpec`s:
 
 * `LinkParams::enable_graph_capture` turns CUDA graphs on for the compiled
   wiring plan (no effect when the spec list is empty).[Src/Core: graph capture flag](../../../src/core.hpp#L788-L803)
-* `LinkParams::inputs` is an alias → index table for addressing multiple exposed
+* `LinkParams::inputs` is an alias -> index table for addressing multiple exposed
   inputs.
 * `LinkParams::outputs` performs the same role for outputs. [Src/Core: output aliases](../../../src/core.hpp#L779-L803)
 

@@ -2,11 +2,11 @@
  * @brief PTB-XL ECG classification with deep Conv1d-Residual backbone.
  *
  * Architecture:
- *   Conv1d stem (leads → 64 → 128 → 256) with stride-2 downsampling
- *   → 3× Residual blocks (Conv1d 256→256→256) + SiLU + SoftDropout
- *   → AdaptiveAvgPool1d(1) → Flatten
- *   → FC(256 → 128) + SiLU + HardDropout(0.2)
- *   → FC(128 → num_classes)
+ *   Conv1d stem (leads -> 64 -> 128 -> 256) with stride-2 downsampling
+ *   -> 3x Residual blocks (Conv1d 256->256->256) + SiLU + SoftDropout
+ *   -> AdaptiveAvgPool1d(1) -> Flatten
+ *   -> FC(256 -> 128) + SiLU + HardDropout(0.2)
+ *   -> FC(128 -> num_classes)
  *
  * Training regime:
  *   - Optimizer: AdamW(lr=3e-4, weight_decay=1e-2) + CosineAnnealing LR with warmup
@@ -60,7 +60,7 @@ int main() {
 
     std::cout << "PTB-XL: " << train_signals.size(0) << " train samples, "
               << val_signals.size(0) << " val samples, "
-              << num_leads << " leads × " << input_length << " timesteps, "
+              << num_leads << " leads x " << input_length << " timesteps, "
               << num_classes << " classes\n";
 
     /* ---- Normalization ---- */

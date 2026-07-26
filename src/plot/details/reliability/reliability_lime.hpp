@@ -43,7 +43,7 @@ namespace Nott::Plot::Details::Reliability {
 
         inline void RenderLIMEPlot(std::size_t sample_index, const std::vector<std::pair<std::size_t, double>>& importances, bool show_weights, const Utils::Gnuplot::TerminalOptions& terminalOptions) {
             Utils::Gnuplot plotter("gnuplot", terminalOptions);
-            plotter.setTitle("LIME – sample " + std::to_string(sample_index));
+            plotter.setTitle("LIME - sample " + std::to_string(sample_index));
             plotter.setXLabel("Feature");
             plotter.setYLabel("Contribution");
             plotter.setGrid(true);

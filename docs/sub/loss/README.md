@@ -27,11 +27,11 @@ implementation at compile time through `std::variant` visitation.
 | `Loss::BCEWithLogits` | `reduction`, `use_weight`, `use_pos_weight` | Combines sigmoid and binary cross-entropy for numerical stability. |
 | `Loss::NegativeLogLikelihood` | `reduction`, `ignore_index` | Works with log-probabilities and optional class masking. |
 | `Loss::KLDiv` | `reduction`, `log_target` | Computes KL divergence against targets that can be log-probabilities. |
-| `Loss::CosineEmbedding` | `margin` | Measures cosine similarity between paired embeddings with ±1 labels. |
+| `Loss::CosineEmbedding` | `margin` | Measures cosine similarity between paired embeddings with +/-1 labels. |
 | `Loss::MarginRanking` | `margin` | Compares ordered pairs of scores. |
-| `Loss::Dice` | `reduction`, `smooth`, `exponent`, `clamp_predictions` | Segmentation-friendly Sørensen–Dice overlap with optional per-sample weights. |
+| `Loss::Dice` | `reduction`, `smooth`, `exponent`, `clamp_predictions` | Segmentation-friendly Sorensen-Dice overlap with optional per-sample weights. |
 | `Loss::Tversky` | `reduction`, `alpha`, `beta`, `smooth` | Generalises Dice/Jaccard with asymmetric penalties for FP vs FN counts. |
-| `Loss::LovaszSoftmax` | `reduction`, `per_image`, `ignore_index`, `apply_softmax`, `include_background`, `only_present_classes` | Optimises a convex Lovász hinge surrogate of the Jaccard index for dense multi-class segmentation. |
+| `Loss::LovaszSoftmax` | `reduction`, `per_image`, `ignore_index`, `apply_softmax`, `include_background`, `only_present_classes` | Optimises a convex Lovasz hinge surrogate of the Jaccard index for dense multi-class segmentation. |
 
 `Loss::CrossEntropy` covers the common multi-class classification scenario where logits are compared against integer class indices. Use it when your output layer represents mutually-exclusive classes and you want a numerically stable softmax + negative-log-likelihood pipeline. The options map directly onto LibTorch's `torch::nn::functional::CrossEntropyFuncOptions`: enable `label_smoothing` to soften hard targets, flip `use_weight` to `true` when class imbalance requires weighting, and adjust `reduction` to control aggregation.
 

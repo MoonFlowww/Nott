@@ -215,6 +215,17 @@ add_library(Nott SHARED
 target_link_libraries(Nott PUBLIC "${TORCH_LIBRARIES}" Boost::filesystem ${OpenCV_LIBS})
 target_include_directories(Nott PUBLIC ${CMAKE_SOURCE_DIR}/include ${TORCH_INCLUDE_DIRS} ${OpenCV_INCLUDE_DIRS})
 
+# Gate for the GPU fast paths (AMP autocast, input prefetch, CUDA graph capture).
+# Defined only when a CUDA toolkit is present; otherwise those blocks compile out and
+# training still runs, just without the extras.
+find_package(CUDAToolkit QUIET)
+if(CUDAToolkit_FOUND)
+    target_compile_definitions(Nott PUBLIC TORCH_CUDA_AVAILABLE)
+    message(STATUS "Nott: CUDA toolkit found, GPU fast paths enabled (TORCH_CUDA_AVAILABLE)")
+else()
+    message(STATUS "Nott: no CUDA toolkit, GPU fast paths compiled out")
+endif()
+
 # ---- Examples ---------------------------------------------------------------
 # One executable target per file under examples/. Every target is registered
 # but EXCLUDE_FROM_ALL, so a plain `cmake --build .` builds nothing here --

@@ -13,22 +13,22 @@ also be used to instantiate the low-level module manually.
 
 ### `MultiHeadOptions`
 
-- `embed_dim` *(int64, required)* – size of the model/embedding dimension.
+- `embed_dim` *(int64, required)*, size of the model/embedding dimension.
   Must be positive and divisible by `num_heads`.
-- `num_heads` *(int64, default: `1`)* – number of parallel attention heads.
+- `num_heads` *(int64, default: `1`)*, number of parallel attention heads.
   Must be positive.
-- `dropout` *(double, default: `0.0`)* – dropout probability applied to the
+- `dropout` *(double, default: `0.0`)*, dropout probability applied to the
   attention weights and the post-projection output.
-- `bias` *(bool, default: `true`)* – include learnable biases in the query, key,
+- `bias` *(bool, default: `true`)*, include learnable biases in the query, key,
   value, and output projections.
-- `add_bias_kv` *(bool, default: `false`)* – reserved for parity with LibTorch's
+- `add_bias_kv` *(bool, default: `false`)*, reserved for parity with LibTorch's
   API; currently not consumed by the implementation.
-- `add_zero_attn` *(bool, default: `false`)* – placeholder for future zero
+- `add_zero_attn` *(bool, default: `false`)*, placeholder for future zero
   attention padding support.
-- `batch_first` *(bool, default: `true`)* – expect inputs shaped as
+- `batch_first` *(bool, default: `true`)*, expect inputs shaped as
   `{batch, sequence, embed_dim}`. When `false`, inputs should be
   `{sequence, batch, embed_dim}`.
-- `variant` *(enum, default: `Variant::Full`)* – choose between full attention
+- `variant` *(enum, default: `Variant::Full`)*, choose between full attention
   and a causal (upper-triangularly masked) variant.
 
 ## Runtime Module: `Nott::Attention::Details::MultiHeadAttention`

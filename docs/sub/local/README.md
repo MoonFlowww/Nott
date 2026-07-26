@@ -15,7 +15,7 @@ attached to a module descriptor:
 | --- | --- | --- |
 | `optimizer` | `std::optional<Nott::Optimizer::Descriptor>` | Replaces the model-wide optimizer for the owning module. |
 | `loss` | `std::optional<Nott::Loss::Descriptor>` | Serialised with the architecture for future use. |
-| `regularization` | `std::vector<Nott::Regularization::Descriptor>` | Registers penalties that only touch the owning module’s parameters. |
+| `regularization` | `std::vector<Nott::Regularization::Descriptor>` | Registers penalties that only touch the owning module's parameters. |
 
 The structure lives in `src/common/local.hpp` and is fully serialised when a
 model is saved, so local scopes survive round-trips through

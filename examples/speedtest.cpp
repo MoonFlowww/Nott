@@ -224,7 +224,7 @@ namespace LatencyUtils {
         const double q3 = quantile_linear(sorted, 0.75);
         const double iqr = q3 - q1;
 
-        // Freedman–Diaconis bin width
+        // Freedman-Diaconis bin width
         double bin_width = 0.0;
         if (iqr > 0.0) {
             bin_width = 2.0 * iqr * std::pow(static_cast<double>(n), -1.0 / 3.0);

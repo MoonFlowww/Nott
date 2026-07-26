@@ -25,7 +25,7 @@
 
 #ifdef TORCH_CUDA_AVAILABLE
 #include <ATen/cuda/CUDAEvent.h>
-#include <ATen/cuda/CUDAStream.h>
+#include <c10/cuda/CUDAStream.h>
 #endif
 
 namespace Nott::Training {
@@ -178,18 +178,20 @@ void iterate_batches_buffered(
 struct alignas(64) PrefetchState {
     /** @brief Construct with a CUDA stream from the default pool. */
     explicit PrefetchState(int device_index)
-        : stream(torch::cuda::getStreamFromPool(/*high=*/false, device_index)) {}
+        : stream(c10::cuda::getStreamFromPool(/*high=*/false, device_index)) {}
 
     /// Hot path -- read on every batch iteration, packed into one cache line
     std::array<bool, 2> pending{false, false};
     std::array<bool, 2> input_stable{false, false};
     std::array<bool, 2> target_stable{false, false};
+    std::array<bool, 2> consumed_valid{false, false};
 
     /// Cold path -- accessed once per transfer, separate cache lines
-    torch::cuda::CUDAStream stream;
+    c10::cuda::CUDAStream stream;
     std::array<torch::Tensor, 2> inputs{};
     std::array<torch::Tensor, 2> targets{};
-    std::array<at::cuda::CUDAEvent, 2> events{};
+    std::array<at::cuda::CUDAEvent, 2> events{};    // copy-done, compute waits before reading
+    std::array<at::cuda::CUDAEvent, 2> consumed{};  // compute-done, prefetch waits before reusing the slot
 };
 
 /**
@@ -222,23 +224,28 @@ void iterate_batches_prefetch(
             epoch_indices, channels_last_inputs, fetch_batch);
         if (!inputs.defined() || !targets.defined()) return false;
 
+        // WAR: don't overwrite this slot's buffers until the compute that last read them is done
+        if (pstate.consumed_valid[slot])
+            pstate.consumed[slot].block(pstate.stream);
+
+        // copies go on the prefetch stream (that is what overlaps them with compute)
         pstate.inputs[slot] = stage_to_device(std::move(inputs),
             pstate.inputs[slot], pstate.input_stable[slot], device,
-            channels_last_inputs, /*force_non_blocking=*/true);
+            channels_last_inputs, /*force_non_blocking=*/true, &pstate.stream);
         pstate.targets[slot] = stage_to_device(std::move(targets),
             pstate.targets[slot], pstate.target_stable[slot], device,
-            /*apply_channels_last=*/false, /*force_non_blocking=*/true);
+            /*apply_channels_last=*/false, /*force_non_blocking=*/true, &pstate.stream);
 
-        { torch::cuda::CUDAStreamGuard g(pstate.stream);
-          pstate.events[slot].record(pstate.stream); }
+        pstate.events[slot].record(pstate.stream);
         pstate.pending[slot] = true;
         return true;
     };
 
     auto wait = [&](std::size_t slot) {
         if (pstate.pending[slot]) {
+            // make the compute stream wait for this slot's copy to finish before reading it
             auto cur = at::cuda::getCurrentCUDAStream(device.index());
-            cur.wait(pstate.events[slot]);
+            pstate.events[slot].block(cur);
             pstate.pending[slot] = false;
         }
     };
@@ -248,6 +255,9 @@ void iterate_batches_prefetch(
     for (std::size_t i = 0; i < total_batches && has_batch; ++i) {
         wait(slot);
         process_batch(pstate.inputs[slot], pstate.targets[slot]);
+        // mark compute done reading this slot so the next copy into it can safely wait
+        pstate.consumed[slot].record(at::cuda::getCurrentCUDAStream(device.index()));
+        pstate.consumed_valid[slot] = true;
         std::size_t next = slot ^ 1U;
         has_batch = schedule(i + 1, next);
         slot = next;

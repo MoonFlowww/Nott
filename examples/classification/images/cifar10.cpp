@@ -3,9 +3,9 @@
  *
  * Architecture:
  *   Vision Transformer encoder (patch_size=4, 8 layers, 8 heads, embed_dim=256)
- *   → Global mean pooling over token dimension
- *   → FC(256 → 128) + SiLU + Dropout(0.15)
- *   → FC(128 → 10) classification head
+ *   -> Global mean pooling over token dimension
+ *   -> FC(256 -> 128) + SiLU + Dropout(0.15)
+ *   -> FC(128 -> 10) classification head
  *
  * Training regime:
  *   - Optimizer: AdamW(lr=5e-4, weight_decay=5e-2) + CosineAnnealing LR with 5-epoch warmup
@@ -73,7 +73,7 @@ int main() {
     vit_opts.final_layer_norm = true;
     model.add(Nott::Block::Transformer::Vision::Encoder(vit_opts), "vit");
 
-    /** Global pooling over token dimension (dim=1) → (B, 256) */
+    /** Global pooling over token dimension (dim=1) -> (B, 256) */
     model.add(Nott::Layer::Reduce({
         .op = Nott::Layer::ReduceOp::Mean,
         .dims = {1},

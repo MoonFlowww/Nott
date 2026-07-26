@@ -2,16 +2,16 @@
 
 Nott serialises models as a pair of files inside the target directory:
 
-- `architecture.json` – human-readable description of the module graph, including
+- `architecture.json`, human-readable description of the module graph, including
   block/layer descriptors, `LocalConfig` overrides, loss/optimizer/regularisation
   descriptors, and named ports used by [Docs/Links](../links/README.md).
-- `parameters.binary` – TorchScript archive containing module parameters and
+- `parameters.binary`, TorchScript archive containing module parameters and
   buffers.
 
 Invoke `Model::save(path)` after building your network; Nott ensures the target
 folder exists and will prompt before overwriting when the directory already
 exists. Confirming the prompt causes the existing files to be rewritten in
-place—Nott does not create temporary files or offer atomic guarantees for the
+place-Nott does not create temporary files or offer atomic guarantees for the
 update. During `Model::load`:
 
 1. `architecture.json` is parsed and replayed by calling `Model::add()` for each

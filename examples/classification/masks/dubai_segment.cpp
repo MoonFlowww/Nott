@@ -706,7 +706,7 @@ namespace {
         int w = W / cuts[1]; //cuts resolution
 
         std::size_t samples = subcuts ? (cuts[0] * cuts[1]) + ((cuts[0] - 1) * (cuts[1] - 1)) : (cuts[0] * cuts[1]);
-        // x² + (x-1)²
+        // x^2 + (x-1)^2
         std::vector<torch::Tensor> out;
         out.reserve(samples);
 
@@ -1348,7 +1348,7 @@ int main() {
 
             SubCuts:
                 - Maximization of Base-Samples [Acc]
-                - Redundant information can only appear twice in the dataset, but never at the same position on the image (always TopLeft vs BottomRight || TopRight vs BottomLeft)  leading to P(Overfit)⁻ + Conv=Sum[Freq(window)]=> taking neighbors and not all neurons to all neurons [Acc]
+                - Redundant information can only appear twice in the dataset, but never at the same position on the image (always TopLeft vs BottomRight || TopRight vs BottomLeft)  leading to P(Overfit)^- + Conv=Sum[Freq(window)]=> taking neighbors and not all neurons to all neurons [Acc]
 
         Geodesic-Based Voronoi Diagram:
             - Able to use metrics as input (no Pics) [Lat+Acc]

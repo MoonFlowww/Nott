@@ -3,7 +3,7 @@ Robust & Outlier-Resistant
 - Winsorized Z-score
 - IQR scaling
 - Huberized scaling
-- Tukey’s biweight scaling
+- Tukey's biweight scaling
 - Hampel filter + standardize
 - Qn scale estimator
 - Sn scale estimator
@@ -22,7 +22,7 @@ Distribution Shaping / Gaussianization
 - Quantile transform to Uniform
 - Quantile transform to Gaussian (probit / van der Waerden / rank-Gauss)
 - Normal scores (Blom, Hazen, etc.)
-- Lambert-W × F transform
+- Lambert-W x F transform
 - Quantile normalization
 - Histogram equalization CDF mapping
 - Arcsinh scaling
@@ -47,8 +47,8 @@ Volatility & Microstructure-Aware
 - Vol-targeting / studentization
 - GARCH-sigma standardization
 - Parkinson volatility normalization
-- Garman–Klass volatility normalization
-- Rogers–Satchell volatility normalization
+- Garman-Klass volatility normalization
+- Rogers-Satchell volatility normalization
 - ATR scaling
 - Bollinger Z-score
 - %b oscillator
@@ -59,16 +59,16 @@ Volatility & Microstructure-Aware
 - VWAP deviation Z-score
 
 Filters & Detrenders
-- Hodrick–Prescott filter + Boost
+- Hodrick-Prescott filter + Boost
 - Hamilton filter
-- Baxter–King band-pass filter
-- Christiano–Fitzgerald band-pass filter
+- Baxter-King band-pass filter
+- Christiano-Fitzgerald band-pass filter
 - STL decomposition
 - Kalman local-level / local-trend smoother
 - Butterworth filter
-- Savitzky–Golay smoothing
+- Savitzky-Golay smoothing
 - LOWESS / LOESS detrending
-- Beveridge–Nelson decomposition
+- Beveridge-Nelson decomposition
 - One-sided HP filter
 - Seasonal differencing
 - Fractional differencing
@@ -78,7 +78,7 @@ Spectral / Decorrelation / Whitening
 - PCA whitening
 - ZCA whitening
 - Cholesky whitening
-- Ledoit–Wolf shrinkage whitening
+- Ledoit-Wolf shrinkage whitening
 - Oracle Approximating Shrinkage whitening
 - Robust covariance (MCD) whitening
 - Graphical Lasso whitening
@@ -97,7 +97,7 @@ Ehlers / DSP-Style
 Time-Series Stationarity Staples
 - Log scaling
 - Square-root scaling
-- Box–Cox / Yeo–Johnson
+- Box-Cox / Yeo-Johnson
 - Simple differencing
 - Seasonal differencing
 - Z-normalization for subsequences

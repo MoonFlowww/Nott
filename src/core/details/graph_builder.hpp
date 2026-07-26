@@ -161,7 +161,7 @@ namespace Nott {
       return value;
     };
 
-    enum class PortRole { Source, Target };
+    enum class PortRole : std::uint8_t { Source, Target };
 
     auto resolve_module = [&](const Port &port, PortRole role) -> std::size_t {
       if (port.identifier.empty()) {
