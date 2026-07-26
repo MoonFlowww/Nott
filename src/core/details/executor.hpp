@@ -5,12 +5,71 @@
 
 namespace Nott {
 
+#ifdef TORCH_CUDA_AVAILABLE
+  // eager iterations run before a graph capture to warm up kernel selection and allocate state/buffers
+  constexpr int kGraphWarmupIters = 3;
+
+  inline bool Model::GraphCaptureState::is_replay_ready() const noexcept {
+    return captured && !dirty && graph != nullptr;
+  }
+
+  inline void Model::GraphCaptureState::run_replay() {
+    if (!capture_stream.has_value()) {
+      throw std::runtime_error("CUDA graph replay requested without an associated capture stream.");
+    }
+    c10::cuda::CUDAStreamGuard guard(*capture_stream);
+    graph->replay();
+  }
+
+  template <class Fn>
+  torch::Tensor Model::GraphCaptureState::run_capture(Fn &&work) {
+    if (!graph) {
+      graph = std::make_unique<at::cuda::CUDAGraph>();
+    } else {
+      graph->reset();
+    }
+    if (!capture_stream.has_value()) {
+      capture_stream = c10::cuda::getStreamFromPool();
+    }
+    captured = false;
+
+    // callers run eager warmup steps first (to settle cuDNN autotune / optimizer state /
+    // workspaces); make sure that is finished before recording, since capture cannot autotune
+    // or allocate host memory
+    torch::cuda::synchronize();
+
+    c10::cuda::CUDAStreamGuard guard(*capture_stream);
+    bool capture_started = false;
+    try {
+      graph->capture_begin();
+      capture_started = true;
+      auto result = work();
+      graph->capture_end();
+      capture_started = false;
+      captured = true;
+      dirty = false;
+      // isolate the private graph pool from later work (else a later model can read its memory)
+      torch::cuda::synchronize();
+      return result;
+    } catch (...) {
+      if (capture_started) {
+        try { graph->capture_end(); } catch (...) {}
+      }
+      graph->reset();
+      capture_stream.reset();
+      captured = false;
+      dirty = true;
+      throw;
+    }
+  }
+#endif
+
   inline torch::Tensor Model::forward(torch::Tensor input) {
     return forward_internal(std::move(input), {}, nullptr, nullptr);
   }
 
   inline torch::Tensor Model::forward(torch::Tensor input, ForwardOptions options) {
-    return forward_internal(std::move(input), std::move(options), nullptr, nullptr);
+    return forward_internal(std::move(input), options, nullptr, nullptr);
   }
 
   inline Model::ForwardActivationCaptureResult Model::forward_with_activation_capture(
@@ -25,7 +84,7 @@ namespace Nott {
       throw std::runtime_error("Requested module is not part of the model graph.");
 
     torch::Tensor captured_activation;
-    auto logits = forward_internal(std::move(input), std::move(options), layer, &captured_activation);
+    auto logits = forward_internal(std::move(input), options, layer, &captured_activation);
     if (!captured_activation.defined())
       throw std::runtime_error("Failed to capture activation for the requested module.");
 
@@ -68,20 +127,15 @@ namespace Nott {
       if (resolved_graph_mode == GraphMode::Replay) {
 #ifdef TORCH_CUDA_AVAILABLE
         auto &state = graph_capture_state(phase);
-        if (!state.captured || state.dirty || !state.graph) {
+        if (!state.is_replay_ready()) {
           throw std::runtime_error(
               "CUDA graph replay requested for inference before a capture was recorded.");
         }
         ensure_graph_input_shape(GraphMode::Replay, input);
         ensure_execution_workspace();
         input = stage_tensor_for_execution(std::move(input));
-        copy_into_graph_input_buffer(std::move(input), workspace_tensor_policy(GraphMode::Replay));
-        if (!state.capture_stream.has_value()) {
-          throw std::runtime_error(
-              "CUDA graph replay requested for inference without an associated capture stream.");
-        }
-        torch::cuda::CUDAStreamGuard guard(*state.capture_stream);
-        state.graph->replay();
+        copy_into_graph_input_buffer(input, workspace_tensor_policy(GraphMode::Replay));
+        state.run_replay();
         return graph_output_tensor();
 #else
         throw std::runtime_error("CUDA graph replay requested but CUDA support is unavailable.");
@@ -94,41 +148,15 @@ namespace Nott {
         if (state.dirty) {
           reset_graph_shape_cache(GraphMode::Capture);
         }
+        input = stage_tensor_for_execution(std::move(input));
         ensure_graph_input_shape(GraphMode::Capture, input);
-        if (!state.graph) {
-          state.graph = std::make_unique<torch::cuda::CUDAGraph>();
-        } else {
-          state.graph->reset();
+        // eager warmup so cuDNN autotune is settled before capture
+        for (int i = 0; i < kGraphWarmupIters; ++i) {
+          execute(input, GraphMode::Disabled);
         }
-        if (!state.capture_stream.has_value()) {
-          state.capture_stream = torch::cuda::getStreamFromPool();
-        }
-        state.captured = false;
-        torch::cuda::CUDAStreamGuard guard(*state.capture_stream);
-        bool capture_started = false;
-        try {
-          state.graph->capture_begin(*state.capture_stream);
-          capture_started = true;
-          auto result = execute(std::move(input), GraphMode::Capture);
-          state.graph->capture_end();
-          capture_started = false;
-          state.captured = true;
-          state.dirty = false;
-          state.loss_buffer = torch::Tensor{};
-          return result;
-        } catch (...) {
-          if (capture_started) {
-            try {
-              state.graph->capture_end();
-            } catch (...) {
-            }
-          }
-          state.graph->reset();
-          state.capture_stream.reset();
-          state.captured = false;
-          state.dirty = true;
-          throw;
-        }
+        auto result = state.run_capture([&] { return execute(input, GraphMode::Capture); });
+        state.loss_buffer = torch::Tensor{};
+        return result;
 #else
         throw std::runtime_error("CUDA graph capture requested but CUDA support is unavailable.");
 #endif
@@ -217,7 +245,7 @@ namespace Nott {
     ensure_execution_workspace();
 
     constexpr std::size_t kInputNodeIndex = 0;
-    copy_into_graph_input_buffer(std::move(tensor), workspace_tensor_policy(graph_mode));
+    copy_into_graph_input_buffer(tensor, workspace_tensor_policy(graph_mode));
 
     auto &workspace = graph_workspace_;
 
@@ -516,7 +544,7 @@ namespace Nott {
     return tensor;
   }
 
-  inline void Model::copy_into_graph_input_buffer(torch::Tensor tensor, WorkspaceTensorPolicy policy) {
+  inline void Model::copy_into_graph_input_buffer(const torch::Tensor &tensor, WorkspaceTensorPolicy policy) {
     constexpr std::size_t kInputNodeIndex = 0;
     copy_tensor_into(graph_workspace_.input, tensor, policy);
     graph_workspace_.bind_input(kInputNodeIndex);
@@ -577,9 +605,16 @@ namespace Nott {
     invalidate_graph_capture(GraphExecutionPhase::Inference);
   }
 
-  inline bool Model::graph_execution_enabled(GraphMode mode, GraphExecutionPhase phase) const noexcept {
+  inline bool Model::graph_execution_enabled(GraphMode mode, GraphExecutionPhase phase) const {
     if (mode == GraphMode::Disabled) {
       return false;
+    }
+    // Capture is not supported: the training capture threads autograd through fixed node buffers
+    // via an in-place copy_, which throws on repeated capture-mode execution and cannot preserve
+    // the backward linkage. Fixing it needs a capture that only pins input/output/grad buffers and
+    // lets intermediates be ordinary autograd tensors in the graph's private pool.
+    if (mode == GraphMode::Capture || mode == GraphMode::Replay) {
+      throw std::runtime_error("Nott: GraphMode capture/replay is not supported; use GraphMode::Disabled.");
     }
     if (!graph_capture_opt_in_) {
       return false;
@@ -697,9 +732,6 @@ namespace Nott {
 
 #ifdef TORCH_CUDA_AVAILABLE
     const bool use_amp = amp_enabled && device_.is_cuda();
-    if (use_amp) {
-      ensure_amp_scaler();
-    }
 #else
     (void) amp_enabled;
     const bool use_amp = false;
@@ -768,19 +800,11 @@ namespace Nott {
         }
       }
 
+      // bf16 autocast needs no gradient scaling (fp32 exponent range), so the AMP and
+      // non-AMP steps are identical here; autocast is applied around forward via AutocastGuard.
       const bool retain_graph = (mode != GraphMode::Disabled);
-#ifdef TORCH_CUDA_AVAILABLE
-      if (use_amp) {
-        auto scaled_loss = amp_scaler_->scale(loss);
-        scaled_loss.backward({}, retain_graph);
-        step_optimizers_with_scaler(*amp_scaler_);
-        amp_scaler_->update();
-      } else
-#endif
-      {
-        loss.backward({}, retain_graph);
-        step_optimizers();
-      }
+      loss.backward({}, retain_graph);
+      step_optimizers();
 
       zero_grad();
 
@@ -796,66 +820,38 @@ namespace Nott {
                                  if (state.dirty) {
                                    reset_graph_shape_cache(GraphMode::Capture);
                                  }
-                                 if (!state.graph) {
-                                   state.graph = std::make_unique<torch::cuda::CUDAGraph>();
-                                 } else {
-                                   state.graph->reset();
-                                 }
-
-                                 if (!state.capture_stream.has_value()) {
-                                   state.capture_stream = torch::cuda::getStreamFromPool();
-                                 }
                                  ensure_execution_workspace();
+                                 // stage inputs and targets to the device before capture begins; the
+                                 // device transfer pins host memory, which is illegal once capturing.
+                                 batch_inputs = stage_tensor_for_execution(std::move(batch_inputs));
+                                 if (batch_targets.defined() && batch_targets.device() != device_) {
+                                   batch_targets = batch_targets.to(device_, /*non_blocking=*/device_.is_cuda());
+                                 }
                                  ensure_graph_input_shape(GraphMode::Capture, batch_inputs);
-                                 copy_into_graph_input_buffer(std::move(batch_inputs), workspace_tensor_policy(GraphMode::Capture));
+                                 copy_into_graph_input_buffer(batch_inputs, workspace_tensor_policy(GraphMode::Capture));
                                  batch_inputs = graph_workspace_.input;
 
                                  state.target_buffer = batch_targets.detach();
                                  state.target_buffer.requires_grad_(false);
                                  batch_targets = state.target_buffer;
 
-                                 state.captured = false;
-                                 torch::cuda::CUDAStreamGuard guard(*state.capture_stream);
+                                 // eager warmup so cuDNN autotune and optimizer state are settled
+                                 // before capture (Disabled mode rebinds buffers, no in-place on leaves)
+                                 for (int i = 0; i < kGraphWarmupIters; ++i) {
+                                   run_training_step(GraphMode::Disabled, graph_workspace_.input, state.target_buffer);
+                                 }
 
-                                 bool capture_started = false;
                                  try {
-                                   state.graph->capture_begin(*state.capture_stream);
-                                   capture_started = true;
-                                   auto loss = run_training_step(GraphMode::Capture, std::move(batch_inputs),
-                                       std::move(batch_targets));
-                                   state.graph->capture_end();
-                                   capture_started = false;
+                                   auto loss = state.run_capture([&] {
+                                     return run_training_step(GraphMode::Capture, graph_workspace_.input,
+                                         state.target_buffer);
+                                   });
                                    state.loss_buffer = loss.detach();
                                    state.loss_buffer.requires_grad_(false);
                                    loss.detach_();
-                                   state.captured = true;
-                                   state.dirty = false;
-#ifdef TORCH_CUDA_AVAILABLE
-                                   if (use_amp && amp_scaler_) {
-                                     state.amp_scaler_state = amp_scaler_->state_dict();
-                                     state.amp_scaler_state_valid = true;
-                                   } else {
-                                     state.amp_scaler_state.clear();
-                                     state.amp_scaler_state_valid = false;
-                                   }
-#endif
                                    return state.loss_buffer;
                                  } catch (...) {
-                                   if (capture_started) {
-                                     try {
-                                       state.graph->capture_end();
-                                     } catch (...) {
-                                     }
-                                   }
-                                   state.graph->reset();
-                                   state.capture_stream.reset();
-                                   state.captured = false;
-                                   state.dirty = true;
                                    state.loss_buffer = torch::Tensor{};
-#ifdef TORCH_CUDA_AVAILABLE
-                                   state.amp_scaler_state.clear();
-                                   state.amp_scaler_state_valid = false;
-#endif
                                    throw;
                                  }
 #else
@@ -864,9 +860,13 @@ namespace Nott {
                                }
       case GraphMode::Replay: {
 #ifdef TORCH_CUDA_AVAILABLE
-                                if (!state.captured || state.dirty || !state.graph) {
+                                if (!state.is_replay_ready()) {
                                   throw std::runtime_error(
                                       "CUDA graph replay requested for training before a capture was recorded.");
+                                }
+                                batch_inputs = stage_tensor_for_execution(std::move(batch_inputs));
+                                if (batch_targets.defined() && batch_targets.device() != device_) {
+                                  batch_targets = batch_targets.to(device_, /*non_blocking=*/device_.is_cuda());
                                 }
                                 ensure_graph_input_shape(GraphMode::Replay, batch_inputs);
                                 if (graph_target_shape_cache_) {
@@ -874,23 +874,11 @@ namespace Nott {
                                 }
                                 enforce_graph_shape(GraphMode::Replay, batch_targets, graph_target_shape_cache_, "target tensor");
                                 ensure_execution_workspace();
-                                copy_into_graph_input_buffer(std::move(batch_inputs), workspace_tensor_policy(GraphMode::Replay));
+                                copy_into_graph_input_buffer(batch_inputs, workspace_tensor_policy(GraphMode::Replay));
                                 auto detached_targets = batch_targets.detach();
                                 detached_targets.requires_grad_(false);
                                 copy_tensor_into(state.target_buffer, detached_targets, workspace_tensor_policy(GraphMode::Replay));
-                                if (!state.capture_stream.has_value()) {
-                                  throw std::runtime_error(
-                                      "CUDA graph replay requested for training without an associated capture stream.");
-                                }
-                                torch::cuda::CUDAStreamGuard guard(*state.capture_stream);
-                                if (use_amp && amp_scaler_ && state.amp_scaler_state_valid) {
-                                  amp_scaler_->load_state_dict(state.amp_scaler_state);
-                                }
-                                state.graph->replay();
-                                if (use_amp && amp_scaler_) {
-                                  state.amp_scaler_state = amp_scaler_->state_dict();
-                                  state.amp_scaler_state_valid = true;
-                                }
+                                state.run_replay();
                                 return state.loss_buffer;
 #else
                                 throw std::runtime_error("CUDA graph replay requested but CUDA support is unavailable.");

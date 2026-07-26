@@ -11,7 +11,7 @@ namespace Nott {
       torch::Tensor targets;
     };
 
-    [[nodiscard]] static TensorDataset prepare_tensor_dataset(torch::Tensor inputs, torch::Tensor targets,
+    [[nodiscard]] static TensorDataset prepare_tensor_dataset(torch::Tensor inputs, const torch::Tensor &targets,
         torch::MemoryFormat memory_format =
         torch::MemoryFormat::Contiguous) {
       auto prepared_inputs = std::move(inputs);
@@ -23,7 +23,7 @@ namespace Nott {
       } else {
         prepared_inputs = prepared_inputs.contiguous();
       }
-      auto prepared_targets = std::move(targets).contiguous();
+      auto prepared_targets = targets.contiguous();
       prepared_inputs = Nott::Training::ensure_pinned(std::move(prepared_inputs));
       prepared_targets = Nott::Training::ensure_pinned(std::move(prepared_targets));
       return TensorDataset{std::move(prepared_inputs), std::move(prepared_targets)};
@@ -81,7 +81,7 @@ namespace Nott {
           targets.push_back(std::move(sample.second));
         }
 
-        return TensorDataset{torch::stack(std::move(inputs)), torch::stack(std::move(targets))};
+        return TensorDataset{torch::stack(inputs), torch::stack(targets)};
       }
 
     static void log_epoch(std::ostream &stream,
@@ -115,8 +115,6 @@ namespace Nott {
         std::ostringstream delta_stream;
         delta_stream << std::showpos << std::fixed << std::setprecision(6) << *delta;
         line << delta_stream.str();
-      } else if (test_loss) {
-        line << "N/A";
       } else {
         line << "N/A";
       }
@@ -161,6 +159,9 @@ namespace Nott {
 
     ~AutocastGuard() {
       if (enabled_) {
+        // must clear the autocast weight cache on exit; otherwise the next step reuses stale
+        // low-precision weight copies from this forward and the model never learns
+        at::autocast::clear_cache();
         at::autocast::set_autocast_enabled(device_type_, previous_enabled_);
         at::autocast::set_autocast_dtype(device_type_, previous_dtype_);
       }
@@ -173,33 +174,15 @@ namespace Nott {
     torch::ScalarType previous_dtype_{torch::kFloat32};
   };
 
+  // autocast compute dtype for AMP; bf16 keeps the fp32 exponent range so no loss scaling
+  // is needed. only reached on CUDA (use_amp gates on it).
   inline torch::ScalarType Model::determine_autocast_dtype() const {
     if (cached_autocast_dtype_) {
       return *cached_autocast_dtype_;
     }
-    for (const auto &parameter: this->parameters(/*recurse=*/false)) {
-      if (parameter.defined()) {
-        cached_autocast_dtype_ = parameter.scalar_type();
-        return *cached_autocast_dtype_;
-      }
-    }
-    for (const auto &buffer: this->buffers(/*recurse=*/false)) {
-      if (buffer.defined()) {
-        cached_autocast_dtype_ = buffer.scalar_type();
-        return *cached_autocast_dtype_;
-      }
-    }
-    cached_autocast_dtype_ = torch::kFloat32;
-    return torch::kFloat32;
+    cached_autocast_dtype_ = device_.is_cuda() ? torch::kBFloat16 : torch::kFloat32;
+    return *cached_autocast_dtype_;
   }
-
-#ifdef TORCH_CUDA_AVAILABLE
-  inline void Model::ensure_amp_scaler() {
-    if (!amp_scaler_) {
-      amp_scaler_.emplace();
-    }
-  }
-#endif
 
   template<class Config, class Dataset>
     void Model::train(Dataset dataset) {
@@ -275,11 +258,6 @@ namespace Nott {
     }
 #ifdef TORCH_CUDA_AVAILABLE
     amp_training_active_ = effective_options.enable_amp && device_.is_cuda();
-    if (amp_training_active_) {
-      ensure_amp_scaler();
-    } else {
-      amp_scaler_.reset();
-    }
 #else
     (void) effective_options.enable_amp;
     amp_training_active_ = false;
@@ -304,7 +282,7 @@ namespace Nott {
     set_tensor_memory_format(effective_options.memory_format);
 
     auto build_training_dataset = [&](torch::Tensor inputs, torch::Tensor targets) {
-      auto dataset = TrainingDetails::prepare_tensor_dataset(std::move(inputs), std::move(targets),
+      auto dataset = TrainingDetails::prepare_tensor_dataset(std::move(inputs), targets,
           effective_options.memory_format);
       dataset = TrainingDetails::ensure_contiguous(std::move(dataset), effective_options.memory_format);
       dataset = TrainingDetails::ensure_cpu(std::move(dataset), effective_options.memory_format);
@@ -579,12 +557,6 @@ namespace Nott {
     clear_training_telemetry();
     invalidate_graph_capture(GraphExecutionPhase::Training);
     graph_workspace_.invalidate();
-#ifdef TORCH_CUDA_AVAILABLE
-    if (amp_training_active_) {
-      amp_scaler_.reset();
-      ensure_amp_scaler();
-    }
-#endif
   }
 
   inline void Model::ensure_optimizer_graph_capability(GraphMode mode) const {
@@ -592,16 +564,16 @@ namespace Nott {
       return;
     }
 
-    auto build_error_message = [](const OptimizerBinding &binding) {
-      std::string optimizer_name{"optimizer"};
-      if (binding.instance) {
-        if (dynamic_cast<torch::optim::AdamW *>(binding.instance.get())) {
-          optimizer_name = "AdamW";
-        }
-      }
-      return std::string("Optimizer '") + optimizer_name +
-        "' does not support CUDA graph execution; CUDA graphs remain unsupported until a capture-safe " +
-        optimizer_name + " variant is implemented.";
+    // a scheduler changes the learning rate on the host each step; capture would freeze it
+    if (scheduler_) {
+      throw std::runtime_error(
+          "CUDA graph capture cannot be used with a learning-rate scheduler; the schedule would be frozen at capture time.");
+    }
+
+    auto build_error_message = [](const OptimizerBinding &) {
+      return std::string(
+          "Optimizer does not support CUDA graph capture (its step depends on host-side state such as a step "
+          "counter or bias correction); use SGD, or GraphMode::Disabled.");
     };
 
     if (optimizer_) {

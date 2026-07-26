@@ -11,8 +11,10 @@ add_executable(nott_tests EXCLUDE_FROM_ALL
     optimizer_test.cpp
     attention_kernel_test.cpp
     layer_test.cpp
+    precision_test.cpp
     block_test.cpp
     links_test.cpp
+    graph_capture_test.cpp
     model_io_test.cpp
     metric_ground_truth_test.cpp
     training_integration_test.cpp

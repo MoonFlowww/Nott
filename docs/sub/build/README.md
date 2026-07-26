@@ -1,12 +1,12 @@
 # Building Nott
 
-Nott is a header-only framework layered over LibTorch: almost everything under `src/` is templates and inline code pulled in by whichever translation unit includes it. The `Nott` CMake target mainly exists to (1) resolve LibTorch, Boost and OpenCV once and expose them to every consumer, and (2) give IDEs a single place to index the full header tree. There is currently no test suite or benchmark harness in this repository — the buildable units are the library and the files under [`examples/`](../../../examples).
+Nott is a header-only framework layered over LibTorch: almost everything under `src/` is templates and inline code pulled in by whichever translation unit includes it. The `Nott` CMake target mainly exists to (1) resolve LibTorch, Boost and OpenCV once and expose them to every consumer, and (2) give IDEs a single place to index the full header tree. There is currently no test suite or benchmark harness in this repository, the buildable units are the library and the files under [`examples/`](../../../examples).
 
 ## Prerequisites
 
 | Dependency | Notes |
 | --- | --- |
-| CMake ≥ 3.18 | |
+| CMake >= 3.18 | |
 | A C++20 compiler | GCC or Clang with full C++20 support |
 | [LibTorch](https://pytorch.org/get-started/locally/) | Defaults to `/opt/libtorch`; override with `-DTorch_DIR=...` or `-D_libtorch_root=...` if installed elsewhere |
 | Boost (`filesystem`) | Resolved via `find_package(Boost)` |
@@ -25,11 +25,11 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 cmake --build build -j"$(nproc)"
 ```
 
-A plain build only compiles the `Nott` shared library (`libNott.so`). None of the examples are built by default — see below.
+A plain build only compiles the `Nott` shared library (`libNott.so`). None of the examples are built by default, see below.
 
 ## Building examples
 
-Every file under `examples/` gets its own executable target ([`examples/CMakeLists.txt`](../../../examples/CMakeLists.txt)), but every one of those targets is registered `EXCLUDE_FROM_ALL`. Each example links the full Torch/OpenCV stack, so compiling all of them unconditionally can take the better part of an hour — you must name the target(s) you want:
+Every file under `examples/` gets its own executable target ([`examples/CMakeLists.txt`](../../../examples/CMakeLists.txt)), but every one of those targets is registered `EXCLUDE_FROM_ALL`. Each example links the full Torch/OpenCV stack, so compiling all of them unconditionally can take the better part of an hour, you must name the target(s) you want:
 
 ```bash
 cmake --build build --target example_cifar10
@@ -50,7 +50,7 @@ Run a built example directly, e.g.:
 ./build/examples/example_cifar10
 ```
 
-Most examples load a dataset from a hardcoded local path near the top of their `main()` (e.g. `/home/.../DATASETS/...`) — edit that path to point at your own copy of the dataset before running.
+Most examples load a dataset from a hardcoded local path near the top of their `main()` (e.g. `/home/.../DATASETS/...`), edit that path to point at your own copy of the dataset before running.
 
 ## Using Nott from another CMake project
 

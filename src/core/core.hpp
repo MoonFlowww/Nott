@@ -37,11 +37,10 @@
 #include <torch/optim/sgd.h>
 #ifdef TORCH_CUDA_AVAILABLE
 #include <torch/cuda.h>
-#include <torch/cuda/amp.h>
 #include <ATen/cuda/CUDAContext.h>
 #include <ATen/cuda/CUDAEvent.h>
-#include <ATen/cuda/CUDAStream.h>
-#include <nvToolsExt.h>
+#include <ATen/cuda/CUDAGraph.h>
+#include <c10/cuda/CUDAStream.h>
 #endif
 #include <ATen/DeviceGuard.h>
 #include <ATen/autocast_mode.h>
@@ -158,7 +157,7 @@ namespace Nott {
     struct OptimizerBinding {
       std::unique_ptr<torch::optim::Optimizer> instance{};
       std::function<void(torch::optim::Optimizer &)> warmup{};
-      bool capture_safe{true};
+      bool capture_safe{false};
       bool warmed_up{false};
 
       OptimizerBinding() = default;
@@ -185,10 +184,18 @@ namespace Nott {
 
     struct GraphCaptureState {
 #ifdef TORCH_CUDA_AVAILABLE
-      std::unique_ptr<torch::cuda::CUDAGraph> graph{};
-      std::optional<torch::cuda::CUDAStream> capture_stream{};
-      torch::Dict<std::string, torch::Tensor> amp_scaler_state{};
-      bool amp_scaler_state_valid{false};
+      std::unique_ptr<at::cuda::CUDAGraph> graph{};
+      std::optional<c10::cuda::CUDAStream> capture_stream{};
+
+      // true once a graph has been captured and nothing has invalidated it since
+      [[nodiscard]] bool is_replay_ready() const noexcept;
+
+      // replays the captured graph on its capture stream; throws if not captured
+      void run_replay();
+
+      // runs work() once under CUDA graph capture; resets state and rethrows on failure
+      template <class Fn>
+      torch::Tensor run_capture(Fn &&work);
 #endif
       bool captured{false};
       bool dirty{true};
@@ -767,7 +774,7 @@ namespace Nott {
             auto options = Optimizer::Details::to_torch_options(concrete_descriptor.options);
             binding.instance = std::make_unique<Optimizer::Details::Adam>(
                 std::move(parameters), options, warmup_buckets);
-            binding.capture_safe = true;
+            binding.capture_safe = false;
             binding.warmup = [](torch::optim::Optimizer &optimizer) {
             if (auto *a = dynamic_cast<Optimizer::Details::Adam *>(&optimizer)) {
               a->ensure_state_initialized();
@@ -777,7 +784,7 @@ namespace Nott {
               auto options = Optimizer::Details::to_torch_options(concrete_descriptor.options);
               binding.instance = std::make_unique<Optimizer::Details::AdamW>(
                   std::move(parameters), options, warmup_buckets);
-              binding.capture_safe = true;
+              binding.capture_safe = false;
               binding.warmup = [](torch::optim::Optimizer &optimizer) {
                 if (auto *aw = dynamic_cast<Optimizer::Details::AdamW *>(&optimizer)) {
                   aw->ensure_state_initialized();
@@ -786,7 +793,7 @@ namespace Nott {
             } else if constexpr (std::is_same_v<DescriptorType, Optimizer::Details::SophiaGDescriptor>) {
               binding.instance = std::make_unique<Optimizer::Details::SophiaG>(
                   std::move(parameters), concrete_descriptor.options);
-              binding.capture_safe = true;
+              binding.capture_safe = false;
               binding.warmup = [](torch::optim::Optimizer &optimizer) {
                 if (auto *sophia = dynamic_cast<Optimizer::Details::SophiaG *>(&optimizer)) {
                   sophia->ensure_state_initialized();
@@ -795,7 +802,7 @@ namespace Nott {
             } else if constexpr (std::is_same_v<DescriptorType, Optimizer::Details::SophiaHDescriptor>) {
               binding.instance = std::make_unique<Optimizer::Details::SophiaH>(
                   std::move(parameters), concrete_descriptor.options);
-              binding.capture_safe = true;
+              binding.capture_safe = false;
               binding.warmup = [](torch::optim::Optimizer &optimizer) {
                 if (auto *sophia = dynamic_cast<Optimizer::Details::SophiaH *>(&optimizer)) {
                   sophia->ensure_state_initialized();
@@ -804,7 +811,7 @@ namespace Nott {
             } else if constexpr (std::is_same_v<DescriptorType, Optimizer::Details::MuonDescriptor>) {
               binding.instance = std::make_unique<Optimizer::Details::Muon>(
                   std::move(parameters), concrete_descriptor.options);
-              binding.capture_safe = true;
+              binding.capture_safe = false;
               binding.warmup = [](torch::optim::Optimizer &optimizer) {
                 if (auto *muon = dynamic_cast<Optimizer::Details::Muon *>(&optimizer)) {
                   muon->ensure_state_initialized();
@@ -813,7 +820,7 @@ namespace Nott {
             } else if constexpr (std::is_same_v<DescriptorType, Optimizer::Details::AdaMuonDescriptor>) {
               binding.instance = std::make_unique<Optimizer::Details::AdaMuon>(
                   std::move(parameters), concrete_descriptor.options);
-              binding.capture_safe = true;
+              binding.capture_safe = false;
               binding.warmup = [](torch::optim::Optimizer &optimizer) {
                 if (auto *AdaMuon = dynamic_cast<Optimizer::Details::AdaMuon *>(&optimizer)) {
                   AdaMuon->ensure_state_initialized();
@@ -823,7 +830,7 @@ namespace Nott {
                 Optimizer::Details::MuonManifoldDescriptor>) {
               binding.instance = std::make_unique<Optimizer::Details::MuonManifold>(
                   std::move(parameters), concrete_descriptor.options);
-              binding.capture_safe = true;
+              binding.capture_safe = false;
               binding.warmup = [](torch::optim::Optimizer &optimizer) {
                 if (auto *MuonManifold = dynamic_cast<Optimizer::Details::MuonManifold *>(&optimizer)) {
                   MuonManifold->ensure_state_initialized();
@@ -832,7 +839,7 @@ namespace Nott {
             } else if constexpr (std::is_same_v<DescriptorType, Optimizer::Details::AdafactorDescriptor>) {
               binding.instance = std::make_unique<Optimizer::Details::Adafactor>(
                   std::move(parameters), concrete_descriptor.options);
-              binding.capture_safe = true;
+              binding.capture_safe = false;
               binding.warmup = [](torch::optim::Optimizer &optimizer) {
                 if (auto *adafactor = dynamic_cast<Optimizer::Details::Adafactor *>(&optimizer)) {
                   adafactor->ensure_state_initialized();
@@ -842,7 +849,7 @@ namespace Nott {
               auto options = Optimizer::Details::to_torch_options(concrete_descriptor.options);
               binding.instance = std::make_unique<Optimizer::Details::Adagrad>(
                   std::move(parameters), options, warmup_buckets);
-              binding.capture_safe = true;
+              binding.capture_safe = false;
               binding.warmup = [](torch::optim::Optimizer &optimizer) {
                 if (auto *ada = dynamic_cast<Optimizer::Details::Adagrad *>(&optimizer)) {
                   ada->ensure_state_initialized();
@@ -851,7 +858,7 @@ namespace Nott {
             } else if constexpr (std::is_same_v<DescriptorType, Optimizer::Details::LAMBDescriptor>) {
               binding.instance = std::make_unique<Optimizer::Details::LAMB>(
                   std::move(parameters), concrete_descriptor.options);
-              binding.capture_safe = true;
+              binding.capture_safe = false;
               binding.warmup = [](torch::optim::Optimizer &optimizer) {
                 if (auto *lamb = dynamic_cast<Optimizer::Details::LAMB *>(&optimizer)) {
                   lamb->ensure_state_initialized();
@@ -860,7 +867,7 @@ namespace Nott {
             } else if constexpr (std::is_same_v<DescriptorType, Optimizer::Details::LionDescriptor>) {
               binding.instance = std::make_unique<Optimizer::Details::Lion>(
                   std::move(parameters), concrete_descriptor.options);
-              binding.capture_safe = true;
+              binding.capture_safe = false;
               binding.warmup = [](torch::optim::Optimizer &optimizer) {
                 if (auto *lion = dynamic_cast<Optimizer::Details::Lion *>(&optimizer)) {
                   lion->ensure_state_initialized();
@@ -870,7 +877,7 @@ namespace Nott {
               auto options = Optimizer::Details::to_torch_options(concrete_descriptor.options);
               binding.instance = std::make_unique<Optimizer::Details::RMSProp>(
                   std::move(parameters), options, warmup_buckets);
-              binding.capture_safe = true;
+              binding.capture_safe = false;
               binding.warmup = [](torch::optim::Optimizer &optimizer) {
                 if (auto *rmsp = dynamic_cast<Optimizer::Details::RMSProp *>(&optimizer)) {
                   rmsp->ensure_state_initialized();
@@ -1123,6 +1130,16 @@ namespace Nott {
       }
       cached_autocast_dtype_.reset();
       this->to(device_);
+      return *this;
+    }
+
+    // TF32 and cuDNN benchmark are process-global, not per-layer; set them in one place
+    Model &set_precision(bool allow_tf32, bool benchmark_cudnn = true) {
+      at::globalContext().setAllowTF32CuDNN(allow_tf32);
+      at::globalContext().setAllowTF32CuBLAS(allow_tf32);
+      if (torch::cuda::is_available() && torch::cuda::cudnn_is_available()) {
+        at::globalContext().setBenchmarkCuDNN(benchmark_cudnn);
+      }
       return *this;
     }
 
@@ -1509,7 +1526,7 @@ namespace Nott {
 
     static std::string describe_module(const Layer::Details::RegisteredLayer &layer);
 
-    enum class WorkspaceTensorPolicy {
+    enum class WorkspaceTensorPolicy : std::uint8_t {
       RebindStorage,
       PreserveStorage
     };
@@ -1533,7 +1550,7 @@ namespace Nott {
 
     [[nodiscard]] torch::Tensor stage_tensor_for_execution(torch::Tensor tensor) const;
 
-    void copy_into_graph_input_buffer(torch::Tensor tensor, WorkspaceTensorPolicy policy);
+    void copy_into_graph_input_buffer(const torch::Tensor &tensor, WorkspaceTensorPolicy policy);
 
     [[nodiscard]] const torch::Tensor &graph_output_tensor() const noexcept {
       return graph_workspace_.output;
@@ -1556,14 +1573,14 @@ namespace Nott {
           }
 
           auto memory_format = tensor_memory_format_;
-          if (tensor_memory_format_ == torch::MemoryFormat::ChannelsLast && parameter.dim() < 4) {
-            memory_format = torch::MemoryFormat::Contiguous;
-          } else if (
-              tensor_memory_format_ == torch::MemoryFormat::ChannelsLast3d && parameter.dim() < 5) {
+          const bool too_few_dims_for_2d = tensor_memory_format_ == torch::MemoryFormat::ChannelsLast && parameter.dim() < 4;
+          const bool too_few_dims_for_3d = tensor_memory_format_ == torch::MemoryFormat::ChannelsLast3d && parameter.dim() < 5;
+          if (too_few_dims_for_2d || too_few_dims_for_3d) {
             memory_format = torch::MemoryFormat::Contiguous;
           }
-          parameter = parameter.to(
-              parameter.options(), /*non_blocking*/false, /*copy*/false, memory_format);
+          // in-place swap; a plain reassign decouples this member from the registered param the optimizer holds
+          parameter.set_data(parameter.to(
+              parameter.options(), /*non_blocking*/false, /*copy*/false, memory_format));
         };
 
         apply_to_parameter(convolution->weight);
@@ -1645,7 +1662,7 @@ namespace Nott {
 
     void invalidate_graph_captures() noexcept;
 
-    [[nodiscard]] bool graph_execution_enabled(GraphMode mode, GraphExecutionPhase phase) const noexcept;
+    [[nodiscard]] bool graph_execution_enabled(GraphMode mode, GraphExecutionPhase phase) const;
 
     void ensure_execution_workspace();
 
@@ -1734,7 +1751,7 @@ namespace Nott {
     RegularizationBinding make_regularization_binding(Regularization::Descriptor descriptor,
         const std::vector<torch::Tensor> &parameters) const {
       RegularizationBinding binding{};
-      binding.descriptor = std::move(descriptor);
+      binding.descriptor = descriptor;
       binding.states = prepare_regularization_states(binding.descriptor, parameters);
       binding.accumulator = Regularization::bind_accumulator(binding.descriptor, binding.states);
       return binding;
@@ -1914,9 +1931,6 @@ namespace Nott {
     bool has_convolutional_layers_{false};
     bool amp_training_active_{false};
     mutable std::optional<torch::ScalarType> cached_autocast_dtype_{};
-#ifdef TORCH_CUDA_AVAILABLE
-    std::optional<torch::cuda::amp::GradScaler> amp_scaler_{};
-#endif
 
 
     void configure_step_impl() noexcept {
@@ -1935,16 +1949,6 @@ namespace Nott {
         optimizer.instance->step();
       }
     }
-#ifdef TORCH_CUDA_AVAILABLE
-    void step_optimizers_with_scaler(torch::cuda::amp::GradScaler &scaler) {
-      if (optimizer_) {
-        scaler.step(*optimizer_->instance);
-      }
-      for (auto &optimizer: local_optimizers_) {
-        scaler.step(*optimizer.instance);
-      }
-    }
-#endif
 
     void step_not_configured() {
       throw std::logic_error("Optimizer has not been configured.");
@@ -1991,10 +1995,6 @@ namespace Nott {
     struct AutocastGuard;
 
     [[nodiscard]] torch::ScalarType determine_autocast_dtype() const;
-
-#ifdef TORCH_CUDA_AVAILABLE
-    void ensure_amp_scaler();
-#endif
   };
 }
 

@@ -20,7 +20,7 @@
 
 #ifdef TORCH_CUDA_AVAILABLE
 #include <ATen/cuda/CUDAEvent.h>
-#include <ATen/cuda/CUDAStream.h>
+#include <c10/cuda/CUDAStream.h>
 #endif
 
 namespace Nott::Block::Details::Transformer::EBT {
@@ -375,7 +375,7 @@ namespace Nott::Block::Details::Transformer::EBT {
                     if (!state.is_cuda()) {
                         return false;
                     }
-                    if (at::cuda::isCurrentStreamCapturing()) {
+                    if (c10::cuda::currentStreamCaptureStatusMayInitCtx() != c10::cuda::CaptureStatus::None) {
                         return false;
                     }
 

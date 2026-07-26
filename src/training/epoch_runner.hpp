@@ -131,7 +131,7 @@ void run_epochs(
 #endif
         );
 
-        /// Issue non-blocking H2D copy of train loss — no GPU sync on the hot path.
+        /// Issue non-blocking H2D copy of train loss - no GPU sync on the hot path.
         DeferredScalar deferred_train_loss{};
         if (total_weight > 0) {
             auto normalized = accumulation.to(torch::kFloat64) / static_cast<double>(total_weight);
@@ -142,7 +142,7 @@ void run_epochs(
         const double duration = std::chrono::duration<double>(
             std::chrono::steady_clock::now() - epoch_start).count();
 
-        /// Test evaluation (synchronous — needed for best-state tracking)
+        /// Test evaluation (synchronous - needed for best-state tracking)
         std::optional<double> test_loss{};
         if (test_dataset)
             test_loss = compute_test_loss(model, *test_dataset, policy);

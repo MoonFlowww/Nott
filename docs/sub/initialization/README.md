@@ -2,7 +2,7 @@
 
 Nott exposes a small set of ready-made initialization descriptors that can be
 attached to any layer or block descriptor. Each descriptor is a thin wrapper
-around the corresponding LibTorch initializer and is completely stateless – you
+around the corresponding LibTorch initializer and is completely stateless, you
 select the strategy by passing one of the `Nott::Initialization::*` constants
 when building your model.
 
@@ -20,7 +20,7 @@ model.add(Nott::Layer::FC({...}, Nott::Activation::ReLU, Nott::Initialization::H
 | `HeNormal` | Calls `torch::nn::init::kaiming_normal_` with `fan_in` mode and ReLU non-linearity assumptions, then zeros the bias (if present). | Recommended for ReLU-family activations. |
 | `HeUniform` | Calls `torch::nn::init::kaiming_uniform_` with `fan_in` mode and ReLU non-linearity assumptions, then zeros the bias (if present). | ReLU-oriented uniform variant. |
 | `ZeroBias` | Leaves weights untouched and sets any defined bias tensor to zeros. | Handy when you want predictable bias values without changing the weight initializer. |
-| `Dirac` | Applies `torch::nn::init::dirac_` to weight tensors of dimension ≥ 3 and zeros the bias (if present). | Ideal for convolutional layers that should initially behave like identity mappings. |
+| `Dirac` | Applies `torch::nn::init::dirac_` to weight tensors of dimension >= 3 and zeros the bias (if present). | Ideal for convolutional layers that should initially behave like identity mappings. |
 | `Lyapunov` | Applies `torch::nn::init::orthogonal_` to the weight tensor and zeros the bias (if present). | Produces orthogonal matrices, often used for recurrent or state-space layers. |
 
 All descriptors are parameterless; if you need a custom initializer you can

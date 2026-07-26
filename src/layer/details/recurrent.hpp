@@ -47,8 +47,6 @@ namespace Nott::Layer::Details {
         bool bias{true};
         double forget_gate_bias{1.0}; // applied after init if bias==true
         c10::ScalarType param_dtype{at::kFloat};
-        bool allow_tf32{true};
-        bool benchmark_cudnn{true};
     };
 
     struct GRUOptions {
@@ -60,8 +58,6 @@ namespace Nott::Layer::Details {
         bool bidirectional{false};
         bool bias{true};
         c10::ScalarType param_dtype{at::kFloat};
-        bool allow_tf32{true};
-        bool benchmark_cudnn{true};
     };
 
     /// xLSTMOptions mirrors LSTMOptions so existing descriptors compile.
@@ -169,14 +165,6 @@ namespace Nott::Layer::Details {
                 }
 
                 register_module("lstm", lstm_);
-
-                /// cuDNN setup (use new precision API instead of deprecated allowTF32)
-                const char* tf32_setting = options_.allow_tf32 ? "tf32" : "none";
-                at::globalContext().setAllowTF32CuDNN(options_.allow_tf32);
-                at::globalContext().setAllowTF32CuBLAS(options_.allow_tf32);
-                if (torch::cuda::is_available() && torch::cuda::cudnn_is_available()) {
-                    at::globalContext().setBenchmarkCuDNN(options_.benchmark_cudnn);
-                }
 
                 /// initialize weights/biases according to project's policy
                 /// (we let higher-level Initializer handle weight init. Here we only fix forget bias.)
@@ -332,12 +320,7 @@ namespace Nott::Layer::Details {
             module->to(descriptor.options.param_dtype);
         }
 
-        const char* tf32_setting = descriptor.options.allow_tf32 ? "tf32" : "none";
-        at::globalContext().setAllowTF32CuDNN(descriptor.options.allow_tf32);   // covers RNN + conv via cuDNN
-        at::globalContext().setAllowTF32CuBLAS(descriptor.options.allow_tf32);
-
         if (torch::cuda::is_available() && torch::cuda::cudnn_is_available()) {
-            at::globalContext().setBenchmarkCuDNN(descriptor.options.benchmark_cudnn);
             if (module && !module->parameters().empty()) {
                 module->flatten_parameters();
             }

@@ -27,7 +27,7 @@ Nott::Plot::Training::Render(model, descriptor, train_losses, val_losses, lrs);
 - **`logScale`** switches the y-axis to log-space for easier inspection of rapid
   loss drops.
 
-You can pass only the tensors you recorded—validation losses and learning rates
+You can pass only the tensors you recorded-validation losses and learning rates
 are optional.
 
 ## Reliability and interpretability
@@ -35,11 +35,11 @@ are optional.
 The `Plot::Reliability` namespace bundles detectors and explanation tools for
 classification models:
 
-- **DET / ROC / PR / Youdens** – Consume logits (or precomputed probability
+- **DET / ROC / PR / Youdens**, Consume logits (or precomputed probability
   series) and render Detection Error Tradeoff, ROC, Precision-Recall, and Youden
   index curves. Options allow log scaling (`adjustScale`) and custom subplot
   styling.
-- **GradCAM / LIME** – Generate visual explanations by projecting feature
+- **GradCAM / LIME**, Generate visual explanations by projecting feature
   importance back onto the input. Supply tensors, and the helper handles model
   hooks internally.
 

@@ -8,6 +8,10 @@ set(NOTT_EXAMPLES
     example_overhead      analysis/overhead.cpp
     example_bench_attention analysis/bench_attention.cpp
     example_bench_memory_arena analysis/bench_memory_arena.cpp
+    example_validate analysis/validate.cpp
+    example_large_cnn_seg analysis/large_cnn_seg.cpp
+    example_bench_prefetch analysis/bench_prefetch.cpp
+    example_bench_optimizer analysis/bench_optimizer.cpp
     example_cifar10       classification/images/cifar10.cpp
     example_dubai_segment classification/masks/dubai_segment.cpp
     example_ptbxl         classification/timeseries/ptbxl.cpp

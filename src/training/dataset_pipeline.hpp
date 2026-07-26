@@ -21,7 +21,7 @@
 #include <torch/torch.h>
 
 #ifdef TORCH_CUDA_AVAILABLE
-#include <ATen/cuda/CUDAStream.h>
+#include <c10/cuda/CUDAStream.h>
 #endif
 
 namespace Nott::Training {
@@ -152,7 +152,7 @@ template<typename TensorDataset>
     bool           apply_channels_last,
     bool           force_non_blocking = false
 #ifdef TORCH_CUDA_AVAILABLE
-    , torch::cuda::CUDAStream* prefetch_stream = nullptr
+    , c10::cuda::CUDAStream* prefetch_stream = nullptr
 #endif
     )
 {
@@ -184,7 +184,9 @@ template<typename TensorDataset>
 
 #ifdef TORCH_CUDA_AVAILABLE
     if (prefetch_stream) {
-        torch::cuda::CUDAStreamGuard guard(*prefetch_stream);
+        // buffer allocated on compute stream, written here on prefetch stream; safe while the slot buffer
+        // outlives the copy. recordStream() only needed if these buffers ever get freed mid-flight
+        c10::cuda::CUDAStreamGuard guard(*prefetch_stream);
         buffer.copy_(tensor, non_blocking);
     } else {
         buffer.copy_(tensor, non_blocking);

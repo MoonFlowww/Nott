@@ -15,39 +15,77 @@ descriptor to be set beforehand (see [Docs/Optimizer](../optimizer/README.md) an
 | `epoch` | Number of epochs to run; zero short-circuits the loop. |
 | `batch_size` | Mini-batch size. Must be non-zero. |
 | `shuffle` | Shuffle dataset between epochs. |
-| `buffer_vram` | When > 0, stage batches in pinned memory and stream them to the GPU asynchronously. Requires the model to live on CUDA. |
+| `buffer_vram` | When > 0, keep the dataset on the host and stream batches to the GPU on a side stream, overlapping the copy with compute. Requires CUDA. See the guidance below for when this actually helps. |
 | `monitor` / `stream` | Enable console logging through `Utils::Terminal` when `stream` is non-null. |
 | `restore_best_state` | Keep a shadow copy of parameters and restore the epoch with the lowest validation/test loss. |
 | `validation` / `test` | Optional `{inputs, targets}` tensors evaluated at the end of each epoch. Validation is used if test is absent. |
-| `graph_mode` | Choose between `GraphMode::Disabled`, `GraphMode::Capture`, and `GraphMode::Replay` (see below). |
-| `enable_amp` | Turn on automatic mixed precision (AMP) when CUDA is available. |
-| `memory_format` | Request `torch::MemoryFormat::ChannelsLast`; Nott only applies it when convolutional layers and CUDA are present. |
+| `graph_mode` | `GraphMode::Disabled` (default), `Capture`, or `Replay`. Capture/Replay are unsupported and throw (see below); leave `Disabled`. |
+| `enable_amp` | Automatic mixed precision (bf16 autocast) on CUDA. Runs conv/matmul in bf16 on tensor cores while keeping fp32 master weights; no effect on CPU. See guidance below. |
+| `memory_format` | Request `torch::MemoryFormat::ChannelsLast`. Applied only when the model has convolutional layers and runs on CUDA with 4D inputs; ignored (no-op) otherwise. |
 
 Validation/test splits are supplied as `std::vector<torch::Tensor>{inputs,
 targets}` to preserve ownership and allow Nott to reuse contiguous host buffers.
 
-## Graph capture and streaming
+## Performance and precision features
 
-CUDA graph support is toggled via `graph_mode`:
+The GPU fast paths below compile in only when a CUDA toolkit is present (CMake
+defines `TORCH_CUDA_AVAILABLE`). On a CPU only build they compile out and training
+still runs correctly, just without the extras.
 
-- `Disabled` (default) – Standard eager execution.
-- `Capture` – Records a training iteration to a CUDA graph; requires fixed batch
-  shapes and drops/pads remainder batches accordingly.
-- `Replay` – Reuses a previously captured graph. Attempting to replay without a
-  capture triggers a descriptive error.
+### Mixed precision (`enable_amp`)
 
-The runtime verifies that selected optimizers are graph-safe and pre-allocates
-workspace buffers so capture does not allocate at runtime. When buffering is
-enabled (`buffer_vram > 0`), a double-buffered CUDA stream prefetcher overlaps
-data transfers with compute.
+Turns on bf16 autocast on CUDA: convolutions and matmuls run in bf16 on the GPU
+tensor cores while parameters and the optimizer stay fp32. bf16 keeps the fp32
+exponent range, so no loss scaling is involved.
+
+- **Use it** for models dominated by convolutions or matmuls (CNNs, UNets,
+  transformers) on an Ampere class GPU or newer (SM 8.0+, such as the RTX 30/40
+  series). Expect roughly 1.5x to 2x per step, largest when paired with
+  `ChannelsLast` (see below).
+- **Skip it** on CPU (no effect), on very small models where the step is not
+  compute bound, and when training is sensitive to reduced mantissa precision
+  (bf16 has about 3 decimal digits). If a model trains cleanly in fp32 but
+  diverges with AMP, stay on fp32.
+
+### Channels last (`memory_format = ChannelsLast`)
+
+Stores 4D activations and conv weights in NHWC so convolutions hit tensor cores.
+Applied only when the model has convolutional layers, runs on CUDA, and inputs are
+4D; otherwise it is silently ignored.
+
+- **Use it** for convolutional models on CUDA, especially together with AMP.
+  That pairing is where the largest speedup shows up (about 2x on the sample UNet
+  over fp32 NCHW).
+- **Skip it** for models without convolutions (FC, RNN, or transformer only),
+  where it does nothing, and on CPU.
+
+### Input prefetch (`buffer_vram > 0`)
+
+Keeps the dataset on the host and copies each batch to the GPU on a side stream so
+the transfer overlaps with the previous batch compute.
+
+- **Use it** when the host to device copy is a real fraction of the step: large
+  inputs with a comparatively cheap model, or a dataset too big to keep resident
+  in VRAM so it must be streamed each epoch.
+- **Skip it** when the whole dataset already fits in VRAM and the model is compute
+  bound (the common case): the copy is then a tiny fraction of the step and the
+  overlap saves nothing. It is always correct, just not always worth enabling.
+
+### CUDA graph capture (`graph_mode`)
+
+**Currently unsupported.** Requesting `Capture` or `Replay` throws. Leave
+`graph_mode` at `Disabled`. The enum stays in the API for a future capture safe
+implementation, which needs a rework of how the training step threads gradients
+through fixed buffers. When it works it only helps launch bound models (many small
+kernels), not the compute bound models that are the common case.
 
 ## Telemetry and monitoring
 
 `Model::training_telemetry()` exposes:
 
-- `EpochSnapshot` – epoch index, deferred train/test loss scalars, deferred
-  step latency, improvement flags, elapsed time, and learning-rate snapshots.
-- `DatasetLossSnapshot` – detailed metrics for validation/test sweeps when
+- `EpochSnapshot`: epoch index, deferred train/test loss scalars, deferred
+  step latency, improvement flags, elapsed time, and learning rate snapshots.
+- `DatasetLossSnapshot`: detailed metrics for validation/test sweeps when
   requested.
 
 These values remain on the host and lazily materialise GPU tensors, making them
@@ -55,7 +93,7 @@ cheap to log or feed into [Docs/Plot](../plot/README.md). When `monitor` is `tru
 progress is streamed to the provided `std::ostream` with non-blocking CUDA event
 handling to avoid stalling the training loop.
 
-### Manual training loop (“semi Nott”)
+### Manual training loop ("semi Nott")
 
 Nott keeps the underlying LibTorch modules exposed, so you can orchestrate a
 training loop manually when you need custom control flow (curriculum learning,
@@ -103,8 +141,8 @@ auto inputs  = stage_for_device(minibatch_inputs);
 auto targets = stage_for_device(minibatch_targets);
 ```
 - **Forward.** `model.forward` executes the compiled graph exactly as
-  `Model::train` would; this keeps AMP, calibration hooks, and CUDA graph capture
-  available when you enable them via `ForwardOptions`.
+  `Model::train` would; this keeps AMP and calibration hooks available when you
+  enable them via `ForwardOptions`.
 - **Backward.** Loss tensors expose the standard `.backward()` API. You can mix
   Nott descriptors with custom reductions, attach gradient hooks, or integrate
   reinforcement learning signals before calling backward.
@@ -115,8 +153,8 @@ auto targets = stage_for_device(minibatch_targets);
 
 Prefer the manual path when you need tight integration with bespoke data
 pipelines, gradient accumulation strategies, or debugging hooks that do not fit
-inside `Model::train`. The abstractions remain the same—you reuse layer builders,
-loss factories, optimizers, and telemetry APIs—while keeping full control over
+inside `Model::train`. The abstractions remain the same, you reuse layer builders,
+loss factories, optimizers, and telemetry APIs, while keeping full control over
 loop structure.
 
 
