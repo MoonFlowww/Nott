@@ -33,7 +33,7 @@ model.add(Nott::Block::Sequential({
             .padding = {1, 1}
         },
         Nott::Activation::ReLU),
-    Nott::Layer::BatchNorm2d(Nott::Layer::BatchNorm2dOptions{.num_features = 64}),
+    Nott::Layer::BatchNorm2d({.num_features = 64}),
     Nott::Layer::Conv2d(
         Nott::Layer::Conv2dOptions{
             .in_channels = 64,
