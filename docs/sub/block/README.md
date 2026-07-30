@@ -24,8 +24,7 @@ Sequential Block:
 Nott::Model model("resnet_tiny");
 
 model.add(Nott::Block::Sequential({
-    Nott::Layer::Conv2d(
-        Nott::Layer::Conv2dOptions{
+    Nott::Layer::Conv2d({
             .in_channels = 3,
             .out_channels = 64,
             .kernel_size = {3, 3},
@@ -34,8 +33,7 @@ model.add(Nott::Block::Sequential({
         },
         Nott::Activation::ReLU),
     Nott::Layer::BatchNorm2d({.num_features = 64}),
-    Nott::Layer::Conv2d(
-        Nott::Layer::Conv2dOptions{
+    Nott::Layer::Conv2d({
             .in_channels = 64,
             .out_channels = 64,
             .kernel_size = {3, 3},
@@ -48,8 +46,7 @@ model.add(Nott::Block::Sequential({
 Residual Block:
 ```cpp
 model.add(Nott::Block::Residual({
-    Nott::Layer::Conv2d(
-        Nott::Layer::Conv2dOptions{
+    Nott::Layer::Conv2d({
             .in_channels = 64,
             .out_channels = 64,
             .kernel_size = {3, 3},
@@ -57,8 +54,7 @@ model.add(Nott::Block::Residual({
             .padding = {1, 1}
         },
         Nott::Activation::ReLU),
-    Nott::Layer::Conv2d(
-        Nott::Layer::Conv2dOptions{
+    Nott::Layer::Conv2d({
             .in_channels = 64,
             .out_channels = 64,
             .kernel_size = {3, 3},
