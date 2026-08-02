@@ -1,6 +1,6 @@
 /// Cosine annealing schedule. The maths is closed form, so these assert the
 /// actual curve rather than just that the learning rate moved.
-#include "third_party/doctest.h"
+#include "test_prelude.hpp"
 
 #include <cmath>
 #include <torch/torch.h>

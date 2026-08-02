@@ -1,4 +1,4 @@
-#include "third_party/doctest.h"
+#include "test_prelude.hpp"
 
 #include <torch/torch.h>
 #include "../include/Nott.h"

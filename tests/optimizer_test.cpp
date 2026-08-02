@@ -1,4 +1,4 @@
-#include "third_party/doctest.h"
+#include "test_prelude.hpp"
 
 #include <torch/torch.h>
 #include <utility>
@@ -80,4 +80,28 @@ TEST_CASE("optimizer: well-understood optimizers actually reduce loss on the toy
     SUBCASE("AdamW") { check_converges(Optimizer::AdamW({.learning_rate = 0.05})); }
     SUBCASE("RMSprop") { check_converges(Optimizer::RMSprop({.learning_rate = 0.05})); }
     SUBCASE("Adagrad") { check_converges(Optimizer::Adagrad({.learning_rate = 0.3})); }
+}
+
+// The eight below were previously smoke-tested only (finite loss, no NaN), so a
+// silently non-learning optimizer would still have passed. These assert the
+// loss actually comes down. Learning rates are set per optimizer because their
+// natural scales differ; Lion in particular needs a much smaller step than SGD.
+TEST_CASE("optimizer: the remaining optimizers also reduce loss on the toy problem") {
+    auto check_converges = [](auto descriptor) {
+        auto losses = train_and_collect_losses(descriptor, /*epochs=*/100);
+        REQUIRE(losses.size() == 100);
+        CHECK(std::isfinite(losses.back()));
+        CHECK(losses.back() < losses.front());
+    };
+
+    SUBCASE("Lion") { check_converges(Optimizer::Lion(Optimizer::LionOptions().lr(0.01))); }
+    SUBCASE("LAMB") { check_converges(Optimizer::LAMB(Optimizer::LAMBOptions().lr(0.05))); }
+    SUBCASE("Adafactor") { check_converges(Optimizer::Adafactor(Optimizer::AdafactorOptions().lr(0.05))); }
+    SUBCASE("SophiaG") { check_converges(Optimizer::SophiaG(Optimizer::SophiaGOptions().lr(0.05))); }
+    SUBCASE("SophiaH") { check_converges(Optimizer::SophiaH(Optimizer::SophiaHOptions().lr(0.05))); }
+    SUBCASE("Muon") { check_converges(Optimizer::Muon(Optimizer::MuonOptions().lr(0.05))); }
+    SUBCASE("AdaMuon") { check_converges(Optimizer::AdaMuon(Optimizer::AdaMuonOptions().lr(0.05))); }
+    SUBCASE("MuonManifold") {
+        check_converges(Optimizer::MuonManifold(Optimizer::MuonManifoldOptions().lr(0.05)));
+    }
 }

@@ -1,7 +1,7 @@
 /// Calibration: the reliability/AUC helpers have closed-form answers on small
 /// inputs, and temperature scaling has a direction we can assert (an
 /// overconfident model should get its logits divided down).
-#include "third_party/doctest.h"
+#include "test_prelude.hpp"
 
 #include <limits>
 #include <sstream>

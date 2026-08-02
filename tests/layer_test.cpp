@@ -1,4 +1,4 @@
-#include "third_party/doctest.h"
+#include "test_prelude.hpp"
 
 #include <torch/torch.h>
 #include "../include/Nott.h"
@@ -145,4 +145,68 @@ TEST_CASE("layer: PatchUnembed reassembles a token grid into a channel-first ima
         Layer::PatchUnembed({.channels = 3, .tokens_height = 2, .tokens_width = 2, .patch_size = 2}), input);
     CHECK(output.size(0) == 4);
     CHECK(output.size(1) == 3);
+}
+
+// The five pooling variants the original suite never constructed. Average
+// pooling has an exact answer on a constant input, so these assert the value
+// and not just the shape; a variant wired to the wrong kernel would still get
+// the shape right.
+TEST_CASE("layer: the remaining pooling variants downsample correctly") {
+    SUBCASE("AvgPool1d averages each window") {
+        auto input = torch::ones({2, 3, 8}, torch::requires_grad(true));
+        auto output = forward_single_layer(Layer::AvgPool1d({.kernel_size = {2}, .stride = {2}}), input);
+        CHECK(output.sizes() == torch::IntArrayRef({2, 3, 4}));
+        CHECK(torch::allclose(output, torch::ones_like(output)));
+    }
+    SUBCASE("AvgPool2d averages each window") {
+        auto input = torch::ones({2, 3, 8, 8}, torch::requires_grad(true));
+        auto output = forward_single_layer(Layer::AvgPool2d({.kernel_size = {2, 2}, .stride = {2, 2}}), input);
+        CHECK(output.sizes() == torch::IntArrayRef({2, 3, 4, 4}));
+        CHECK(torch::allclose(output, torch::ones_like(output)));
+    }
+    SUBCASE("AdaptiveAvgPool1d hits the requested length from an indivisible input") {
+        auto input = torch::randn({2, 3, 10}, torch::requires_grad(true));
+        auto output = forward_single_layer(Layer::AdaptiveAvgPool1d({.output_size = {4}}), input);
+        CHECK(output.sizes() == torch::IntArrayRef({2, 3, 4}));
+    }
+    SUBCASE("AdaptiveMaxPool1d hits the requested length from an indivisible input") {
+        auto input = torch::randn({2, 3, 10}, torch::requires_grad(true));
+        auto output = forward_single_layer(Layer::AdaptiveMaxPool1d({.output_size = {4}}), input);
+        CHECK(output.sizes() == torch::IntArrayRef({2, 3, 4}));
+    }
+    SUBCASE("AdaptiveMaxPool2d hits the requested grid and keeps the per-window maximum") {
+        auto input = torch::randn({2, 3, 9, 9}, torch::requires_grad(true));
+        auto output = forward_single_layer(Layer::AdaptiveMaxPool2d({.output_size = {3, 3}}), input);
+        CHECK(output.sizes() == torch::IntArrayRef({2, 3, 3, 3}));
+        // Max pooling can only ever return values the input actually contained.
+        CHECK(output.max().item<double>() <= input.max().item<double>());
+    }
+    SUBCASE("global adaptive pooling collapses the spatial dims to 1x1") {
+        auto input = torch::randn({2, 5, 7, 7}, torch::requires_grad(true));
+        auto output = forward_single_layer(Layer::AdaptiveAvgPool2d({.output_size = {1, 1}}), input);
+        CHECK(output.sizes() == torch::IntArrayRef({2, 5, 1, 1}));
+    }
+}
+
+// xLSTM had no test at all: it shares LSTMOptions, so a descriptor wired to the
+// wrong implementation would have gone unnoticed.
+TEST_CASE("layer: xLSTM produces a batched sequence output and backprops") {
+    auto input = torch::randn({4, 7, 5}, torch::requires_grad(true));
+    auto output = forward_single_layer(
+        Layer::xLSTM({.input_size = 5, .hidden_size = 6, .batch_first = true}), input);
+    REQUIRE(output.dim() >= 2);
+    CHECK(output.size(0) == 4);
+    CHECK(output.size(1) == 7);
+}
+
+TEST_CASE("layer: xLSTM respects bidirectional and multi-layer options") {
+    auto input = torch::randn({3, 6, 5}, torch::requires_grad(true));
+    auto output = forward_single_layer(
+        Layer::xLSTM({.input_size = 5, .hidden_size = 4, .num_layers = 2, .batch_first = true,
+                      .bidirectional = true}),
+        input);
+    REQUIRE(output.dim() >= 2);
+    CHECK(output.size(0) == 3);
+    // Both directions are concatenated on the feature axis.
+    CHECK(output.size(2) == 8);
 }
