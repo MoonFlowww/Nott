@@ -31,6 +31,7 @@ find_package(OpenCV REQUIRED COMPONENTS core imgcodecs imgproc highgui)
 add_library(Nott SHARED
     src/Nott.cpp
     src/activation/activation.hpp
+    src/activation/serialize.hpp
     src/activation/apply.hpp
     src/activation/details/dsilu.hpp
     src/activation/details/gelu.hpp
@@ -46,6 +47,7 @@ add_library(Nott SHARED
     src/activation/details/swish.hpp
     src/activation/details/tanh.hpp
     src/attention/attention.hpp
+    src/attention/serialize.hpp
     src/attention/builder.hpp
     src/attention/details/head.hpp
     src/attention/details/kernel.hpp
@@ -63,11 +65,22 @@ add_library(Nott SHARED
     src/block/details/transformers/plusplus.hpp
     src/block/details/transformers/titan.hpp
     src/block/details/transformers/vision.hpp
+    src/block/details/transformers/serialize/bert.hpp
+    src/block/details/transformers/serialize/classic.hpp
+    src/block/details/transformers/serialize/ebt.hpp
+    src/block/details/transformers/serialize/longformer_xl.hpp
+    src/block/details/transformers/serialize/mamba.hpp
+    src/block/details/transformers/serialize/perceiver.hpp
+    src/block/details/transformers/serialize/plusplus.hpp
+    src/block/details/transformers/serialize/vision.hpp
+    src/block/serialize.hpp
     src/calibration/calibration.hpp
     src/calibration/details/temperature_scaling.hpp
     src/common/graph.hpp
     src/common/local.hpp
+    src/common/local_serialize.hpp
     src/common/save_load.hpp
+    src/common/serialize.hpp
     src/common/streaming.hpp
     src/common/stresstest.hpp
     src/core/core.hpp
@@ -110,6 +123,7 @@ add_library(Nott SHARED
     src/evaluation/evaluation.hpp
     src/initialization/apply.hpp
     src/initialization/initialization.hpp
+    src/initialization/serialize.hpp
     src/layer/details/batchnorm.hpp
     src/layer/details/conv.hpp
     src/layer/details/dropout.hpp
@@ -124,6 +138,7 @@ add_library(Nott SHARED
     src/layer/details/resizing.hpp
     src/layer/details/s4.hpp
     src/layer/layer.hpp
+    src/layer/serialize.hpp
     src/layer/registry.hpp
     src/loss/details/bce.hpp
     src/loss/details/cce.hpp
@@ -141,6 +156,7 @@ add_library(Nott SHARED
     src/loss/details/smooth_l1.hpp
     src/loss/details/tversky.hpp
     src/loss/loss.hpp
+    src/loss/serialize.hpp
     src/lrscheduler/details/common.hpp
     src/lrscheduler/details/cosineannealing.hpp
     src/lrscheduler/details/exponential.hpp
@@ -157,6 +173,7 @@ add_library(Nott SHARED
     src/optimizer/details/sgd.hpp
     src/optimizer/details/sophia.hpp
     src/optimizer/optimizer.hpp
+    src/optimizer/serialize.hpp
     src/optimizer/registry.hpp
     src/plot/details/data.hpp
     src/plot/details/reliability.hpp
@@ -199,6 +216,7 @@ add_library(Nott SHARED
     src/regularization/details/vat.hpp
     src/regularization/details/wgangp.hpp
     src/regularization/regularization.hpp
+    src/regularization/serialize.hpp
     src/training/batch_iterator.hpp
     src/training/compute_dataset_loss.hpp
     src/training/dataset_pipeline.hpp

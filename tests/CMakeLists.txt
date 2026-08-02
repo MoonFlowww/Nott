@@ -16,6 +16,7 @@ add_executable(nott_tests EXCLUDE_FROM_ALL
     links_test.cpp
     graph_capture_test.cpp
     model_io_test.cpp
+    serialize_test.cpp
     metric_ground_truth_test.cpp
     training_integration_test.cpp
 )

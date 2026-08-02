@@ -72,7 +72,7 @@ TEST_CASE("block: Classic transformer encoder preserves [batch, seq, embed_dim]"
 // docs/README.md as 2 of the "10 transformer architectures" but are empty stub headers
 // (include guard + a paper citation, no code) and aren't in Block::Descriptor's variant
 // or Model::add's dispatcher -- there is nothing to construct or test.
-// ponytail: no Atlas/Titan tests; add them once those headers have an actual implementation.
+// No Atlas/Titan tests; add them once those headers have an actual implementation.
 
 TEST_CASE("block: Classic transformer decoder preserves [batch, seq, embed_dim]") {
     auto input = torch::randn({2, 5, 64}, torch::requires_grad(true));
