@@ -1,7 +1,7 @@
 /// Descriptor level save/load round-trips. model_io_test covers tensor state;
 /// this covers the JSON description of the architecture, which is what the
 /// per module serialize.hpp files produce.
-#include "third_party/doctest.h"
+#include "test_prelude.hpp"
 
 #include "../src/common/save_load.hpp"
 
@@ -83,8 +83,10 @@ TEST_CASE("vision encoder round-trips") {
     descriptor.options.window.shift = true;
     descriptor.layers.emplace_back();
 
-    const auto& vision = std::get<Transformer::Vision::EncoderDescriptor>(
-        block_round_trip(Nott::Block::Descriptor{descriptor}));
+    /// Held by value: std::get on the temporary variant would return a
+    /// reference into an object destroyed at the end of the expression.
+    const auto restored = block_round_trip(Nott::Block::Descriptor{descriptor});
+    const auto& vision = std::get<Transformer::Vision::EncoderDescriptor>(restored);
     CHECK(vision.options.layers == 2);
     CHECK(vision.options.embed_dim == 32);
     CHECK(vision.options.variant == Transformer::Vision::Variant::Swin);
@@ -100,8 +102,10 @@ TEST_CASE("perceiver encoder round-trips") {
     descriptor.options.latent_dim = 128;
     descriptor.layers.emplace_back();
 
-    const auto& perceiver = std::get<Transformer::Perceiver::EncoderDescriptor>(
-        block_round_trip(Nott::Block::Descriptor{descriptor}));
+    /// Held by value: std::get on the temporary variant would return a
+    /// reference into an object destroyed at the end of the expression.
+    const auto restored = block_round_trip(Nott::Block::Descriptor{descriptor});
+    const auto& perceiver = std::get<Transformer::Perceiver::EncoderDescriptor>(restored);
     CHECK(perceiver.options.layers == 3);
     CHECK(perceiver.options.latent_slots == 64);
     CHECK(perceiver.options.latent_dim == 128);
@@ -118,8 +122,10 @@ TEST_CASE("longformer encoder round-trips") {
     descriptor.options.memory_size = 16;
     descriptor.layers.emplace_back();
 
-    const auto& longformer = std::get<Transformer::LongformerXL::EncoderDescriptor>(
-        block_round_trip(Nott::Block::Descriptor{descriptor}));
+    /// Held by value: std::get on the temporary variant would return a
+    /// reference into an object destroyed at the end of the expression.
+    const auto restored = block_round_trip(Nott::Block::Descriptor{descriptor});
+    const auto& longformer = std::get<Transformer::LongformerXL::EncoderDescriptor>(restored);
     CHECK(longformer.options.window_size == 128);
     CHECK(longformer.options.causal == true);
     CHECK(longformer.options.memory_size == 16);

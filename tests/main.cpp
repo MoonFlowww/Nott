@@ -1,5 +1,5 @@
 #define DOCTEST_CONFIG_IMPLEMENT
-#include "third_party/doctest.h"
+#include "test_prelude.hpp"
 
 int main(int argc, char** argv) {
     doctest::Context context;
