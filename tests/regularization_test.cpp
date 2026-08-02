@@ -10,7 +10,7 @@ namespace {
     // Every simple (single-tensor) regularizer descriptor. EWC/MAS/SI are excluded: their
     // penalty() only accepts an extra task-importance state that only exists mid-training,
     // so they're exercised indirectly, not here.
-    // ponytail: no dedicated EWC/MAS/SI unit test; add one if a bug is ever reported there.
+    // No dedicated EWC/MAS/SI unit test; add one if a bug is ever reported there.
     const std::vector<Regularization::Descriptor> kSimpleRegularizers = {
         Regularization::L1(), Regularization::ElasticNet(), Regularization::GroupLasso(),
         Regularization::StructuredL2(), Regularization::L0HardConcrete(), Regularization::Orthogonality(),

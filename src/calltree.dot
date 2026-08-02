@@ -1,0 +1,23 @@
+digraph callgraph {
+    graph [label="/home/moonfloww/Projects/codebase/framework/Nott/src/  (182 files)" labelloc=t fontname="Courier" fontsize=14 bgcolor="#ffffff" fontcolor="black" splines=ortho nodesep=0.4 ranksep=0.7 concentrate=true];
+    node  [shape=box fontname="Courier" style="rounded,filled" fillcolor="#f5f5f5" fontcolor="black"];
+    edge  [fontname="Courier" fontsize=10 color="#333333" fontcolor="black"];
+    rankdir=LR;
+
+    subgraph cluster_0 {
+        label="core.hpp"; style=filled; fillcolor="#eeeeee"; fontcolor="black";
+        "/home/moonfloww/Projects/codebase/framework/Nott/src/core/core.hpp::::Model" [label="class\nModel()\ncalled: 6\nL150-1998"];
+        "/home/moonfloww/Projects/codebase/framework/Nott/src/core/core.hpp::::train" [label="void\ntrain()\ncalled: 1\nL290-297" fillcolor="#ffcf4d" fontcolor="black"];
+    }
+
+    subgraph cluster_1 {
+        label="executor.hpp"; style=filled; fillcolor="#eeeeee"; fontcolor="black";
+        "/home/moonfloww/Projects/codebase/framework/Nott/src/core/details/executor.hpp::::graph_capture_state" [label="Model::GraphCaptureState &\ngraph_capture_state()\ncalled: 5\nL571-579"];
+        "/home/moonfloww/Projects/codebase/framework/Nott/src/core/details/executor.hpp::::invalidate_graph_capture" [label="void\ninvalidate_graph_capture()\ncalled: 6\nL591-601"];
+    }
+
+
+    "/home/moonfloww/Projects/codebase/framework/Nott/src/core/core.hpp::::train" -> "/home/moonfloww/Projects/codebase/framework/Nott/src/core/details/executor.hpp::::invalidate_graph_capture";
+    "/home/moonfloww/Projects/codebase/framework/Nott/src/core/details/executor.hpp::::graph_capture_state" -> "/home/moonfloww/Projects/codebase/framework/Nott/src/core/core.hpp::::Model";
+    "/home/moonfloww/Projects/codebase/framework/Nott/src/core/details/executor.hpp::::invalidate_graph_capture" -> "/home/moonfloww/Projects/codebase/framework/Nott/src/core/details/executor.hpp::::graph_capture_state";
+}
