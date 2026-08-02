@@ -41,11 +41,41 @@ jobs:
           cmake --build build -j"$(nproc)" --target
           example_cifar10 example_dubai_segment example_ptbxl example_etth
 
-      # Real assertions against the API: activations, losses, initializers,
-      # regularizers, optimizers, layers, blocks, and a full train+evaluate
-      # loop exercising every classification/timeseries metric.
       - name: Build test suite
         run: cmake --build build -j"$(nproc)" --target nott_tests
 
-      - name: Run test suite
-        run: ctest --test-dir build --output-on-failure
+      # The suite is one binary but many ctest entries, one per category (see
+      # tests/CMakeLists.txt). Running it as separate labelled steps means a
+      # red X names the area that broke instead of the whole suite. Each step
+      # runs to completion rather than stopping at the first failure, and
+      # if: always() lets the later groups report even when an earlier one
+      # fails, so one push shows every broken area at once.
+      - name: Test - modules
+        run: ctest --test-dir build -L module --output-on-failure
+
+      - name: Test - serialization
+        if: always()
+        run: ctest --test-dir build -L serialization --output-on-failure
+
+      - name: Test - runtime
+        if: always()
+        run: ctest --test-dir build -L runtime --output-on-failure
+
+      - name: Test - integration
+        if: always()
+        run: ctest --test-dir build -L integration --output-on-failure
+
+      # Guards the split itself: every ctest entry must carry one of the four
+      # labels above, otherwise a newly added category would never run in CI
+      # while the build still went green.
+      - name: Check every test is covered by a label
+        if: always()
+        run: |
+          all=$(ctest --test-dir build -N | grep -c "Test *#")
+          labelled=$(ctest --test-dir build -N -L 'module|serialization|runtime|integration' | grep -c "Test *#")
+          echo "labelled $labelled of $all ctest entries"
+          if [ "$all" -ne "$labelled" ]; then
+            echo "::error::$((all - labelled)) test(s) have no CI label and would never run"
+            ctest --test-dir build -N -LE 'module|serialization|runtime|integration'
+            exit 1
+          fi
