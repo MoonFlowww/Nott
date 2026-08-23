@@ -1,4 +1,5 @@
 #include "test_prelude.hpp"
+#include <cmath>
 
 #include <torch/torch.h>
 #include <algorithm>
@@ -176,4 +177,118 @@ TEST_CASE("metric: timeseries metrics match hand-computed values on a known seri
     CHECK(value_of(Kind::MeanSquaredError) == doctest::Approx(1.2));
     CHECK(value_of(Kind::RootMeanSquaredError) == doctest::Approx(std::sqrt(1.2)));
     CHECK(value_of(Kind::R2Score) == doctest::Approx(0.4));
+}
+
+
+TEST_CASE("metric: HausdorffDistance is zero on identical masks and positive when offset") {
+    // Segmentation path: model logits are compared as masks. A 1x1 Conv2d with
+    // weight=1 / bias=0 is an identity map over NCHW so hand-built masks pass through.
+    Model model("metric_ground_truth_hausdorff");
+    model.add(Layer::Conv2d({.in_channels = 1, .out_channels = 1, .kernel_size = {1, 1}, .stride = {1, 1}, .padding = {0, 0}}));
+
+    {
+        torch::NoGradGuard guard;
+        auto parameters = model.parameters();
+        REQUIRE(parameters.size() >= 1);
+        // weight [1,1,1,1] = 1, bias [1] = 0
+        parameters[0].fill_(1.0);
+        if (parameters.size() > 1) {
+            parameters[1].fill_(0.0);
+        }
+    }
+
+    Evaluation::Options eval_options{};
+    eval_options.print_summary = false;
+    eval_options.print_per_class = false;
+
+    std::vector<Metric::Classification::Descriptor> metrics = {
+        Metric::Classification::HausdorffDistance,
+    };
+
+    SUBCASE("identical filled squares -> distance 0") {
+        // 1-sample, 1-channel, 6x6 mask with a solid 3x3 block (non-empty boundary).
+        auto mask = torch::zeros({1, 1, 6, 6}, torch::kFloat32);
+        mask.slice(/*dim=*/2, 1, 4).slice(/*dim=*/3, 1, 4).fill_(1.0f);
+
+        auto report = model.evaluate(mask, mask.clone(), Evaluation::Segmentation, metrics, eval_options);
+        auto it = std::find_if(report.summary.begin(), report.summary.end(),
+                               [](const auto& row) {
+                                   return row.metric == Metric::Classification::Kind::HausdorffDistance;
+                               });
+        REQUIRE(it != report.summary.end());
+        CHECK(it->macro == doctest::Approx(0.0));
+    }
+
+    SUBCASE("single-pixel masks offset by 1 -> distance 1") {
+        // Boundaries of isolated pixels are the pixels themselves, so directed
+        // Hausdorff collapses to Euclidean distance between the two points.
+        auto pred = torch::zeros({1, 1, 5, 5}, torch::kFloat32);
+        auto target = torch::zeros({1, 1, 5, 5}, torch::kFloat32);
+        pred.index_put_({0, 0, 2, 2}, 1.0f);
+        target.index_put_({0, 0, 2, 3}, 1.0f);
+
+        auto report = model.evaluate(pred, target, Evaluation::Segmentation, metrics, eval_options);
+        auto it = std::find_if(report.summary.begin(), report.summary.end(),
+                               [](const auto& row) {
+                                   return row.metric == Metric::Classification::Kind::HausdorffDistance;
+                               });
+        REQUIRE(it != report.summary.end());
+        CHECK(it->macro == doctest::Approx(1.0));
+    }
+}
+
+TEST_CASE("metric: BoundaryIoU is 1 on identical masks and distinct from region IoU on offset boxes") {
+    Model model("metric_ground_truth_boundary_iou");
+    model.add(Layer::Conv2d({.in_channels = 1, .out_channels = 1, .kernel_size = {1, 1}, .stride = {1, 1}, .padding = {0, 0}}));
+
+    {
+        torch::NoGradGuard guard;
+        auto parameters = model.parameters();
+        REQUIRE(parameters.size() >= 1);
+        parameters[0].fill_(1.0);
+        if (parameters.size() > 1) {
+            parameters[1].fill_(0.0);
+        }
+    }
+
+    Evaluation::Options eval_options{};
+    eval_options.print_summary = false;
+    eval_options.print_per_class = false;
+
+    std::vector<Metric::Classification::Descriptor> metrics = {
+        Metric::Classification::BoundaryIoU,
+        Metric::Classification::JaccardIndexMacro,
+    };
+
+    SUBCASE("identical masks -> BoundaryIoU 1") {
+        auto mask = torch::zeros({1, 1, 8, 8}, torch::kFloat32);
+        mask.slice(/*dim=*/2, 2, 6).slice(/*dim=*/3, 2, 6).fill_(1.0f);
+
+        auto report = model.evaluate(mask, mask.clone(), Evaluation::Segmentation, metrics, eval_options);
+        auto biou = std::find_if(report.summary.begin(), report.summary.end(),
+                                 [](const auto& row) {
+                                     return row.metric == Metric::Classification::Kind::BoundaryIoU;
+                                 });
+        REQUIRE(biou != report.summary.end());
+        CHECK(biou->macro == doctest::Approx(1.0));
+    }
+
+    SUBCASE("offset boxes keep BoundaryIoU defined and not trivially 1") {
+        // Two solid boxes sharing most of the interior but with shifted edges.
+        // Boundary IoU is sensitive to the edge mismatch; it must be < 1.
+        auto pred = torch::zeros({1, 1, 10, 10}, torch::kFloat32);
+        auto target = torch::zeros({1, 1, 10, 10}, torch::kFloat32);
+        pred.slice(/*dim=*/2, 2, 7).slice(/*dim=*/3, 2, 7).fill_(1.0f);
+        target.slice(/*dim=*/2, 2, 7).slice(/*dim=*/3, 3, 8).fill_(1.0f);
+
+        auto report = model.evaluate(pred, target, Evaluation::Segmentation, metrics, eval_options);
+        auto biou = std::find_if(report.summary.begin(), report.summary.end(),
+                                 [](const auto& row) {
+                                     return row.metric == Metric::Classification::Kind::BoundaryIoU;
+                                 });
+        REQUIRE(biou != report.summary.end());
+        CHECK(std::isfinite(biou->macro));
+        CHECK(biou->macro < 1.0);
+        CHECK(biou->macro > 0.0);
+    }
 }
