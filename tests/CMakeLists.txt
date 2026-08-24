@@ -10,6 +10,7 @@
 
 # Grouped by what breaks together, so a red label points at an area.
 set(nott_test_modules
+    augmentation_test.cpp
     activation_test.cpp
     loss_test.cpp
     initialization_test.cpp
